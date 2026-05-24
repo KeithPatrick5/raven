@@ -18,11 +18,11 @@ const phases = [
 
 const systemSignals = [
   {
-    title: "Phase 7B lifecycle wired",
+    title: "Phase 7C decision log wired",
     source: "RAVEN_SYSTEM",
     score: 55,
     tone: "blue",
-    copy: "Paper engine records trade decisions, rejects weak signals, and reviews open paper trades for stop or target exits."
+    copy: "Paper engine now exposes recent rejects and trade decisions so empty runs still show what Raven already decided."
   },
   {
     title: "SEC + AI storage online",
@@ -103,7 +103,7 @@ export default async function Home() {
       <section className="main">
         <div className="topbar" id="overview">
           <div>
-            <div className="eyebrow">Phase 7B / Paper trade lifecycle</div>
+            <div className="eyebrow">Phase 7C / Paper decision log</div>
             <h1>Private Raven signal board</h1>
           </div>
           <div className="top-actions">
@@ -127,7 +127,7 @@ export default async function Home() {
           <div className="kpi">
             <div className="kpi-label">Signal engine</div>
             <div className="kpi-value">90%</div>
-            <div className="kpi-note">Lifecycle added</div>
+            <div className="kpi-note">Decision log added</div>
           </div>
           <div className="kpi">
             <div className="kpi-label">Paper trades</div>

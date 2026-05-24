@@ -388,14 +388,20 @@ export async function runPaperTradeEngine(limit = 10) {
     }
   }
 
+  const recentDecisions = await getLatestPaperDecisions(10);
+  const recentTrades = await getLatestPaperTrades(10);
+
   return {
     ok: errors.length === 0,
     database: "configured" as const,
     evaluated: rows.length,
     opened: trades.length,
     rejected: rejects.length,
+    alreadyLogged: recentDecisions.length,
     trades,
     rejects,
+    recentDecisions,
+    recentTrades,
     errors
   };
 }
@@ -553,6 +559,9 @@ export async function reviewOpenPaperTrades(limit = 10) {
     }
   }
 
+  const recentDecisions = await getLatestPaperDecisions(10);
+  const recentTrades = await getLatestPaperTrades(10);
+
   return {
     ok: errors.length === 0,
     database: "configured" as const,
@@ -562,6 +571,8 @@ export async function reviewOpenPaperTrades(limit = 10) {
     stillOpen: open.length,
     closes,
     open,
+    recentDecisions,
+    recentTrades,
     errors
   };
 }
