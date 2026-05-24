@@ -1,4 +1,4 @@
-import { getLatestConfirmedSecSignals } from "@/lib/alpaca";
+import { getLatestScoredSignals } from "@/lib/scoring";
 import { watchlist } from "@/lib/watchlist";
 
 export const dynamic = "force-dynamic";
@@ -7,8 +7,8 @@ const phases = [
   ["Dashboard/watchlist", "Private shell, dense UI, watchlist table."],
   ["SEC EDGAR scanner", "Pull submissions and store raw filings."],
   ["AI classifier", "Summarize filings into strict signal JSON."],
-  ["Alpaca confirmation", "Current build. Add price, volume, liquidity, and relative volume checks."],
-  ["Signal scoring", "Store scored events and risk flags in Postgres."],
+  ["Alpaca confirmation", "Add price, volume, liquidity, and relative volume checks."],
+  ["Signal scoring", "Current build. Store scored events and readable verdicts in Postgres."],
   ["Telegram alerts", "Send high-score alerts and morning reports."],
   ["Dashboard signals", "Show real saved signals and filtering."],
   ["Paper trades", "Log simulated entries, exits, and results only."]
@@ -16,11 +16,11 @@ const phases = [
 
 const systemSignals = [
   {
-    title: "Phase 4 market confirmation wired",
+    title: "Phase 5 scoring engine wired",
     source: "RAVEN_SYSTEM",
     score: 55,
     tone: "blue",
-    copy: "Alpaca confirmation route is ready at /api/confirm/alpaca. It adds latest close, move, volume, relative volume, and confirmation status."
+    copy: "Scoring route is ready at /api/score/signals. It turns AI analysis and market confirmation into readable Raven verdicts."
   },
   {
     title: "SEC + AI storage online",
@@ -46,7 +46,7 @@ function scoreTone(score: number) {
 
 async function safeSignals() {
   try {
-    return await getLatestConfirmedSecSignals(6);
+    return await getLatestScoredSignals(8);
   } catch {
     return [];
   }
@@ -83,14 +83,14 @@ export default async function Home() {
       <section className="main">
         <div className="topbar" id="overview">
           <div>
-            <div className="eyebrow">Phase 4 / Alpaca confirmation</div>
+            <div className="eyebrow">Phase 5 / signal scoring</div>
             <h1>Private Raven signal board</h1>
           </div>
           <div className="top-actions">
             <span className="badge green">Vercel-ready</span>
             <span className="badge green">SEC stored</span>
             <span className="badge blue">AI route wired</span>
-            <span className="badge amber">Alpaca pending keys</span>
+            <span className="badge green">Scoring route wired</span>
             <form action="/api/logout" method="post">
               <button className="ghost-button" type="submit">Lock</button>
             </form>
@@ -105,13 +105,13 @@ export default async function Home() {
           </div>
           <div className="kpi">
             <div className="kpi-label">Signal engine</div>
-            <div className="kpi-value">55%</div>
-            <div className="kpi-note">Market confirmation route added</div>
+            <div className="kpi-value">70%</div>
+            <div className="kpi-note">Readable scoring route added</div>
           </div>
           <div className="kpi">
             <div className="kpi-label">Signals visible</div>
             <div className="kpi-value">{signals.length}</div>
-            <div className="kpi-note">AI + market rows</div>
+            <div className="kpi-note">Scored rows</div>
           </div>
           <div className="kpi">
             <div className="kpi-label">Live trading</div>
@@ -159,13 +159,14 @@ export default async function Home() {
             <section className="panel" id="signals" style={{ marginTop: 14 }}>
               <div className="panel-header">
                 <div>
-                  <div className="panel-title">AI + market signals</div>
-                  <div className="panel-meta">SEC classifications with Alpaca confirmation when available</div>
+                  <div className="panel-title">Scored Raven signals</div>
+                  <div className="panel-meta">Readable scores from SEC, AI, and Alpaca confirmation</div>
                 </div>
                 <div className="top-actions">
                   <a className="badge blue" href="/api/scan/sec">run scan</a>
                   <a className="badge green" href="/api/classify/sec">classify</a>
                   <a className="badge amber" href="/api/confirm/alpaca">confirm</a>
+                  <a className="badge green" href="/api/score/signals">score</a>
                 </div>
               </div>
 
@@ -176,19 +177,24 @@ export default async function Home() {
                       <div className="signal-head">
                         <div>
                           <div className="signal-title">{signal.ticker} · {signal.form} · {signal.category}</div>
-                          <div className="panel-meta">{signal.direction} / {signal.risk_level} risk / {signal.verdict}</div>
+                          <div className="panel-meta">{signal.direction} / {signal.risk_level} risk / {signal.action}</div>
                         </div>
-                        <div className={`score ${scoreTone(signal.tradeability)}`}>{signal.tradeability}</div>
+                        <div className={`score ${scoreTone(signal.final_score)}`}>{signal.final_score}</div>
                       </div>
-                      <p className="signal-copy">{signal.summary}</p>
+                      <p className="signal-copy">{signal.readable_summary}</p>
                       <div className="market-strip">
-                        <span>close {signal.latest_close === null ? "--" : `$${Number(signal.latest_close).toFixed(2)}`}</span>
-                        <span>move {signal.price_change_percent === null ? "--" : `${Number(signal.price_change_percent).toFixed(2)}%`}</span>
-                        <span>rel vol {signal.relative_volume === null ? "--" : `${Number(signal.relative_volume).toFixed(2)}x`}</span>
-                        <span>{signal.confirmation_status || "unconfirmed"}</span>
+                        <span>AI {signal.ai_tradeability}/100</span>
+                        <span>market {signal.market_confirmation}</span>
+                        <span>action {signal.action}</span>
                       </div>
-                      <p className="signal-copy"><strong>Bull:</strong> {signal.bull_case}</p>
-                      <p className="signal-copy"><strong>Bear:</strong> {signal.bear_case}</p>
+                      {Array.isArray(signal.reason_codes) && signal.reason_codes.length > 0 ? (
+                        <ul className="compact-list">
+                          {signal.reason_codes.slice(0, 4).map((reason) => <li key={reason}>{reason}</li>)}
+                        </ul>
+                      ) : null}
+                      {Array.isArray(signal.risk_flags) && signal.risk_flags.length > 0 ? (
+                        <p className="signal-copy"><strong>Risk:</strong> {signal.risk_flags[0]}</p>
+                      ) : null}
                     </article>
                   ))}
                 </div>
@@ -227,7 +233,7 @@ export default async function Home() {
                       <div className="phase-name">{name}</div>
                       <div className="phase-note">{note}</div>
                     </div>
-                    <span className={`badge ${index <= 3 ? "green" : ""}`}>{index < 3 ? "done" : index === 3 ? "now" : "later"}</span>
+                    <span className={`badge ${index <= 4 ? "green" : ""}`}>{index < 4 ? "done" : index === 4 ? "now" : "later"}</span>
                   </div>
                 ))}
               </div>
@@ -242,10 +248,10 @@ export default async function Home() {
               </div>
               <div className="console">
                 RAVEN MORNING<br />
-                1. Weird signals: SEC + AI + price/volume<br />
-                2. Insider buys: Form 4 summaries live<br />
-                3. Dilution traps: classifier flags risk<br />
-                4. Watchlist breakouts: Alpaca confirmation route<br />
+                1. Weird signals: scored SEC events<br />
+                2. Insider activity: AI classified + market checked<br />
+                3. Dilution traps: score penalties applied<br />
+                4. Watchlist breakouts: next Telegram module<br />
                 5. Live trades: disabled
               </div>
             </section>
@@ -262,6 +268,7 @@ export default async function Home() {
                 POSTGRES: configured<br />
                 AI_CLASSIFIER: /api/classify/sec<br />
                 ALPACA_MARKET_DATA: /api/confirm/alpaca<br />
+                SIGNAL_SCORING: /api/score/signals<br />
                 TELEGRAM_ALERTS: queued<br />
                 LIVE_EXECUTION: disabled
               </div>

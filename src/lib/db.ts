@@ -110,4 +110,39 @@ export async function ensureRavenTables() {
     on alpaca_market_confirmations (ticker, created_at desc)
   `;
 
+  await sql`
+    create table if not exists scored_signals (
+      id bigserial primary key,
+      summary_id bigint not null references sec_filing_summaries(id) on delete cascade,
+      confirmation_id bigint references alpaca_market_confirmations(id) on delete set null,
+      accession_number text not null,
+      ticker text not null,
+      form text not null,
+      filing_date date,
+      direction text not null,
+      category text not null,
+      risk_level text not null,
+      ai_tradeability integer not null,
+      market_confirmation text not null,
+      final_score integer not null,
+      action text not null,
+      readable_summary text not null,
+      reason_codes jsonb not null default '[]'::jsonb,
+      risk_flags jsonb not null default '[]'::jsonb,
+      raw_payload jsonb not null,
+      created_at timestamptz not null default now(),
+      unique(summary_id)
+    )
+  `;
+
+  await sql`
+    create index if not exists scored_signals_score_created_idx
+    on scored_signals (final_score desc, created_at desc)
+  `;
+
+  await sql`
+    create index if not exists scored_signals_ticker_created_idx
+    on scored_signals (ticker, created_at desc)
+  `;
+
 }
