@@ -1,4 +1,5 @@
 import { getLatestScoredSignals } from "@/lib/scoring";
+import { getLatestPaperTrades } from "@/lib/paper";
 import { watchlist } from "@/lib/watchlist";
 
 export const dynamic = "force-dynamic";
@@ -9,32 +10,32 @@ const phases = [
   ["AI classifier", "Summarize filings into strict signal JSON."],
   ["Alpaca confirmation", "Add price, volume, liquidity, and relative volume checks."],
   ["Signal scoring", "Store scored events and readable verdicts in Postgres."],
-  ["Telegram alerts", "Current build. Send scored signal alerts and test messages."],
-  ["Dashboard signals", "Show real saved signals and filtering."],
-  ["Paper trades", "Log simulated entries, exits, and results only."]
+  ["Telegram test route", "Bot status messages only. Signal spam disabled."],
+  ["Paper trade engine", "Current build. Deterministic paper-trade decisions."],
+  ["Dashboard signals", "Show real saved signals and filtering."]
 ];
 
 const systemSignals = [
   {
-    title: "Phase 6 Telegram alerts wired",
+    title: "Phase 7A paper engine wired",
     source: "RAVEN_SYSTEM",
     score: 55,
     tone: "blue",
-    copy: "Telegram route is ready at /api/alert/telegram. It sends scored Raven signals to your private bot."
+    copy: "Paper engine route is ready at /api/paper/trades. Telegram only fires if Raven actually opens a paper trade."
   },
   {
     title: "SEC + AI storage online",
     source: "POSTGRES",
     score: 40,
     tone: "green",
-    copy: "Raw SEC filings and AI classification summaries are stored. Duplicate filings and summaries are skipped."
+    copy: "Raw SEC filings, AI classifications, market confirmations, and scored signals are stored."
   },
   {
     title: "Live trading disabled",
     source: "RISK_ENGINE",
     score: 100,
     tone: "green",
-    copy: "Raven remains alerts and paper-trade logging only. AI analyzes. The deterministic engine decides eligibility later."
+    copy: "Raven remains paper-trade only. AI analyzes. Deterministic rules decide whether a simulated trade is opened."
   }
 ];
 
@@ -52,8 +53,17 @@ async function safeSignals() {
   }
 }
 
+async function safePaperTrades() {
+  try {
+    return await getLatestPaperTrades(8);
+  } catch {
+    return [];
+  }
+}
+
 export default async function Home() {
   const signals = await safeSignals();
+  const paperTrades = await safePaperTrades();
 
   return (
     <main className="raven-shell">
@@ -71,7 +81,7 @@ export default async function Home() {
           <a className="nav-item" href="#watchlist">Watchlist <span className="nav-pill">v1</span></a>
           <a className="nav-item" href="#signals">Signals <span className="nav-pill">AI</span></a>
           <a className="nav-item" href="#sources">Sources <span className="nav-pill">SEC</span></a>
-          <a className="nav-item" href="#paper">Paper Trades <span className="nav-pill">locked</span></a>
+          <a className="nav-item" href="#paper">Paper Trades <span className="nav-pill">engine</span></a>
           <a className="nav-item" href="#settings">Settings <span className="nav-pill">soon</span></a>
         </nav>
 
@@ -83,7 +93,7 @@ export default async function Home() {
       <section className="main">
         <div className="topbar" id="overview">
           <div>
-            <div className="eyebrow">Phase 6 / Telegram alerts</div>
+            <div className="eyebrow">Phase 7A / Paper trade engine</div>
             <h1>Private Raven signal board</h1>
           </div>
           <div className="top-actions">
@@ -91,7 +101,7 @@ export default async function Home() {
             <span className="badge green">SEC stored</span>
             <span className="badge blue">AI route wired</span>
             <span className="badge green">Scoring route wired</span>
-            <span className="badge green">Telegram route wired</span>
+            <span className="badge green">Paper engine wired</span>
             <form action="/api/logout" method="post">
               <button className="ghost-button" type="submit">Lock</button>
             </form>
@@ -106,13 +116,13 @@ export default async function Home() {
           </div>
           <div className="kpi">
             <div className="kpi-label">Signal engine</div>
-            <div className="kpi-value">85%</div>
-            <div className="kpi-note">Telegram alerts added</div>
+            <div className="kpi-value">90%</div>
+            <div className="kpi-note">Paper engine added</div>
           </div>
           <div className="kpi">
-            <div className="kpi-label">Signals visible</div>
-            <div className="kpi-value">{signals.length}</div>
-            <div className="kpi-note">Scored rows</div>
+            <div className="kpi-label">Paper trades</div>
+            <div className="kpi-value">{paperTrades.length}</div>
+            <div className="kpi-note">Opened rows</div>
           </div>
           <div className="kpi">
             <div className="kpi-label">Live trading</div>
@@ -168,7 +178,7 @@ export default async function Home() {
                   <a className="badge green" href="/api/classify/sec">classify</a>
                   <a className="badge amber" href="/api/confirm/alpaca">confirm</a>
                   <a className="badge green" href="/api/score/signals">score</a>
-                  <a className="badge green" href="/api/alert/telegram">alert</a>
+                  <a className="badge green" href="/api/paper/trades">paper</a>
                 </div>
               </div>
 
@@ -235,7 +245,7 @@ export default async function Home() {
                       <div className="phase-name">{name}</div>
                       <div className="phase-note">{note}</div>
                     </div>
-                    <span className={`badge ${index <= 5 ? "green" : ""}`}>{index < 5 ? "done" : index === 5 ? "now" : "later"}</span>
+                    <span className={`badge ${index <= 6 ? "green" : ""}`}>{index < 6 ? "done" : index === 6 ? "now" : "later"}</span>
                   </div>
                 ))}
               </div>
@@ -244,18 +254,40 @@ export default async function Home() {
             <section className="panel" id="paper" style={{ marginTop: 14 }}>
               <div className="panel-header">
                 <div>
-                  <div className="panel-title">Morning report preview</div>
-                  <div className="panel-meta">Telegram format placeholder</div>
+                  <div className="panel-title">Paper trades</div>
+                  <div className="panel-meta">Only simulated trades Raven actually opened</div>
                 </div>
+                <a className="badge green" href="/api/paper/trades">run engine</a>
               </div>
-              <div className="console">
-                RAVEN ALERTS<br />
-                1. Scored signals: Telegram-ready<br />
-                2. Test route: /api/alert/telegram?mode=test<br />
-                3. Signal route: /api/alert/telegram<br />
-                4. Duplicate alerts: logged and skipped<br />
-                5. Live trades: disabled
-              </div>
+              {paperTrades.length > 0 ? (
+                <div className="signal-list">
+                  {paperTrades.map((trade) => (
+                    <article className="signal-card" key={trade.accession_number}>
+                      <div className="signal-head">
+                        <div>
+                          <div className="signal-title">{trade.ticker} · {trade.side.toUpperCase()} · {trade.status}</div>
+                          <div className="panel-meta">Paper only / live trading disabled</div>
+                        </div>
+                        <div className={`score ${scoreTone(trade.final_score)}`}>{trade.final_score}</div>
+                      </div>
+                      <div className="market-strip">
+                        <span>entry {trade.entry_price}</span>
+                        <span>stop {trade.stop_price}</span>
+                        <span>target {trade.target_price}</span>
+                      </div>
+                      <p className="signal-copy">{trade.decision_reason}</p>
+                    </article>
+                  ))}
+                </div>
+              ) : (
+                <div className="console">
+                  PAPER_ENGINE: ready<br />
+                  ROUTE: /api/paper/trades<br />
+                  CURRENT RESULT: no paper trade opened until score and market confirmation pass rules<br />
+                  TELEGRAM: sends only if a paper trade opens<br />
+                  LIVE_EXECUTION: disabled
+                </div>
+              )}
             </section>
 
             <section className="panel" id="settings" style={{ marginTop: 14 }}>
@@ -271,7 +303,8 @@ export default async function Home() {
                 AI_CLASSIFIER: /api/classify/sec<br />
                 ALPACA_MARKET_DATA: /api/confirm/alpaca<br />
                 SIGNAL_SCORING: /api/score/signals<br />
-                TELEGRAM_ALERTS: /api/alert/telegram<br />
+                TELEGRAM_TEST: /api/alert/telegram?mode=test<br />
+                PAPER_ENGINE: /api/paper/trades<br />
                 LIVE_EXECUTION: disabled
               </div>
             </section>

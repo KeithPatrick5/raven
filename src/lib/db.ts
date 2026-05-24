@@ -165,4 +165,37 @@ export async function ensureRavenTables() {
     on telegram_alerts (created_at desc)
   `;
 
+
+  await sql`
+    create table if not exists paper_trades (
+      id bigserial primary key,
+      scored_signal_id bigint not null references scored_signals(id) on delete cascade,
+      confirmation_id bigint references alpaca_market_confirmations(id) on delete set null,
+      accession_number text not null,
+      ticker text not null,
+      side text not null,
+      status text not null default 'open',
+      entry_price numeric,
+      stop_price numeric,
+      target_price numeric,
+      exit_price numeric,
+      final_score integer not null,
+      decision_reason text not null,
+      raw_payload jsonb not null,
+      opened_at timestamptz not null default now(),
+      closed_at timestamptz,
+      unique(scored_signal_id)
+    )
+  `;
+
+  await sql`
+    create index if not exists paper_trades_status_opened_idx
+    on paper_trades (status, opened_at desc)
+  `;
+
+  await sql`
+    create index if not exists paper_trades_ticker_opened_idx
+    on paper_trades (ticker, opened_at desc)
+  `;
+
 }
