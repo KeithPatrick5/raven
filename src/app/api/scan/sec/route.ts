@@ -37,7 +37,7 @@ async function saveFilings(filings: Awaited<ReturnType<typeof scanWatchlistSecFi
         ${filing.primaryDocument},
         ${filing.primaryDocumentUrl},
         ${filing.sourceUrl},
-        ${sql.json(filing.rawPayload)}
+        ${JSON.stringify(filing.rawPayload)}::jsonb
       )
       on conflict (accession_number) do nothing
     `;
