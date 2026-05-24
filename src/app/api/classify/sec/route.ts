@@ -6,9 +6,9 @@ export const dynamic = "force-dynamic";
 
 function requestedLimit(url: string): number {
   const parsed = new URL(url);
-  const raw = Number(parsed.searchParams.get("limit") || "4");
-  if (!Number.isFinite(raw)) return 4;
-  return Math.max(1, Math.min(8, Math.floor(raw)));
+  const raw = Number(parsed.searchParams.get("limit") || "1");
+  if (!Number.isFinite(raw)) return 1;
+  return Math.max(1, Math.min(3, Math.floor(raw)));
 }
 
 async function runClassification(request: Request) {

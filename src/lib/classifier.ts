@@ -44,7 +44,7 @@ async function fetchFilingText(url: string | null): Promise<string> {
   }
 
   const text = await response.text();
-  return stripFilingText(text).slice(0, 28000);
+  return stripFilingText(text).slice(0, 9000);
 }
 
 async function getPendingRawFilings(limit: number): Promise<RawSecFilingRow[]> {
@@ -183,7 +183,7 @@ export async function classifyPendingSecFilings(limit = 4) {
   }
 
   return {
-    ok: errors.length === 0,
+    ok: summaries.length > 0,
     database: "configured" as const,
     ai: "configured" as const,
     classified: summaries.length,

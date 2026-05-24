@@ -41,3 +41,8 @@ RAVEN_AI_MODEL=llama-3.3-70b-versatile
 8. Paper trades
 
 Live trading stays disabled by default.
+
+
+## Phase 3 rate-limit note
+
+The AI classifier defaults to one filing per request to stay under free/on-demand Groq token-per-minute limits. Use `/api/classify/sec?limit=2` or `?limit=3` only when rate limits allow it.
