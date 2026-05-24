@@ -1,56 +1,43 @@
 # Raven
 
-Private AI trading scanner for public market signals.
+Private Vercel-first AI trading scanner for public market signals.
 
 ## Current phase
 
-Phase 2 is wired:
+Phase 3 is wired:
 
 - Private dashboard/watchlist shell
-- SEC EDGAR scanner API route
-- Optional Postgres raw filing storage
-- Vercel-first architecture
-- Live trading disabled
-
-## Scanner route
-
-After logging in, visit:
-
-```text
-/api/scan/sec
-```
-
-The route scans the seed watchlist, fetches recent SEC submissions, and returns normalized filings.
-
-When `DATABASE_URL` is configured, Raven creates `raw_sec_filings` and inserts filings by accession number.
+- SEC EDGAR scanner at `/api/scan/sec`
+- Raw SEC filing storage in Postgres
+- AI filing classifier at `/api/classify/sec`
+- Classified filing summaries stored in `sec_filing_summaries`
 
 ## Required env vars
 
-```text
+```txt
 RAVEN_ACCESS_KEY=
 RAVEN_SESSION_SALT=
-```
-
-## Optional env vars
-
-```text
-RAVEN_CRON_SECRET=
-DATABASE_URL=
+DATABASE_URL=        # or STORAGE_URL from Vercel/Neon
 SEC_USER_AGENT=
+GROQ_API_KEY=
 ```
 
-Use `RAVEN_CRON_SECRET` later for external cron pings:
+Optional:
 
-```text
-/api/scan/sec?secret=YOUR_SECRET
+```txt
+RAVEN_CRON_SECRET=
+RAVEN_AI_MODEL=llama-3.3-70b-versatile
 ```
 
-## Locked Raven rules
+## Phase order
 
-- Vercel first
-- No VPS dependency now
-- SEC EDGAR first
-- Alpaca confirmation later
-- AI is the analyst, not the trader
-- Alerts and paper trades before live trading
-- Live trading disabled by default
+1. Dashboard/watchlist
+2. SEC EDGAR scanner and raw storage
+3. AI classifier/summarizer
+4. Alpaca price/volume confirmation
+5. Signal scoring
+6. Telegram alerts
+7. Dashboard signals
+8. Paper trades
+
+Live trading stays disabled by default.
