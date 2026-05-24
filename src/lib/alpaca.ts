@@ -129,7 +129,7 @@ async function getPendingSummaries(limit: number): Promise<PendingSummaryRow[]> 
   `;
 }
 
-async function fetchDailyBars(symbol: string): Promise<AlpacaBar[]> {
+export async function fetchDailyBars(symbol: string): Promise<AlpacaBar[]> {
   const url = new URL(`${marketDataBaseUrl()}/v2/stocks/bars`);
   url.searchParams.set("symbols", symbol);
   url.searchParams.set("timeframe", "1Day");
@@ -156,6 +156,27 @@ async function fetchDailyBars(symbol: string): Promise<AlpacaBar[]> {
 
   const payload = await response.json() as { bars?: Record<string, AlpacaBar[]> };
   return payload.bars?.[symbol] || [];
+}
+
+
+export async function getLatestAlpacaSnapshot(symbol: string) {
+  const bars = await fetchDailyBars(symbol);
+  const latest = bars.at(-1);
+  const previous = bars.at(-2);
+  const latestClose = numberOrNull(latest?.c);
+  const previousClose = numberOrNull(previous?.c);
+  const latestVolume = numberOrNull(latest?.v);
+  const changePercent = pctChange(latestClose, previousClose);
+
+  return {
+    ticker: symbol,
+    latestClose,
+    previousClose,
+    latestVolume,
+    priceChangePercent: round(changePercent),
+    latestBarTime: latest?.t || null,
+    barCount: bars.length
+  };
 }
 
 async function saveConfirmation(summary: PendingSummaryRow, bars: AlpacaBar[]) {

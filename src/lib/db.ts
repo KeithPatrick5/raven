@@ -167,6 +167,33 @@ export async function ensureRavenTables() {
 
 
   await sql`
+    create table if not exists paper_trade_decisions (
+      id bigserial primary key,
+      scored_signal_id bigint not null references scored_signals(id) on delete cascade,
+      accession_number text not null,
+      ticker text not null,
+      decision text not null,
+      final_score integer not null,
+      action text not null,
+      reject_codes jsonb not null default '[]'::jsonb,
+      reason_codes jsonb not null default '[]'::jsonb,
+      raw_payload jsonb not null,
+      created_at timestamptz not null default now(),
+      unique(scored_signal_id)
+    )
+  `;
+
+  await sql`
+    create index if not exists paper_trade_decisions_created_idx
+    on paper_trade_decisions (created_at desc)
+  `;
+
+  await sql`
+    create index if not exists paper_trade_decisions_ticker_created_idx
+    on paper_trade_decisions (ticker, created_at desc)
+  `;
+
+  await sql`
     create table if not exists paper_trades (
       id bigserial primary key,
       scored_signal_id bigint not null references scored_signals(id) on delete cascade,
@@ -184,9 +211,16 @@ export async function ensureRavenTables() {
       raw_payload jsonb not null,
       opened_at timestamptz not null default now(),
       closed_at timestamptz,
+      close_reason text,
+      outcome text,
+      pnl_percent numeric,
       unique(scored_signal_id)
     )
   `;
+
+  await sql`alter table paper_trades add column if not exists close_reason text`;
+  await sql`alter table paper_trades add column if not exists outcome text`;
+  await sql`alter table paper_trades add column if not exists pnl_percent numeric`;
 
   await sql`
     create index if not exists paper_trades_status_opened_idx

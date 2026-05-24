@@ -1,5 +1,5 @@
 import { getLatestScoredSignals } from "@/lib/scoring";
-import { getLatestPaperTrades } from "@/lib/paper";
+import { getLatestPaperDecisions, getLatestPaperTrades } from "@/lib/paper";
 import { watchlist } from "@/lib/watchlist";
 
 export const dynamic = "force-dynamic";
@@ -11,17 +11,18 @@ const phases = [
   ["Alpaca confirmation", "Add price, volume, liquidity, and relative volume checks."],
   ["Signal scoring", "Store scored events and readable verdicts in Postgres."],
   ["Telegram test route", "Bot status messages only. Signal spam disabled."],
-  ["Paper trade engine", "Current build. Deterministic paper-trade decisions."],
-  ["Dashboard signals", "Show real saved signals and filtering."]
+  ["Paper trade engine", "Deterministic paper-trade decisions."],
+  ["Paper trade lifecycle", "Current build. Track opens, rejects, stops, targets."],
+  ["Dashboard cleanup", "Keep only important Raven outputs."]
 ];
 
 const systemSignals = [
   {
-    title: "Phase 7A paper engine wired",
+    title: "Phase 7B lifecycle wired",
     source: "RAVEN_SYSTEM",
     score: 55,
     tone: "blue",
-    copy: "Paper engine route is ready at /api/paper/trades. Telegram only fires if Raven actually opens a paper trade."
+    copy: "Paper engine records trade decisions, rejects weak signals, and reviews open paper trades for stop or target exits."
   },
   {
     title: "SEC + AI storage online",
@@ -61,9 +62,18 @@ async function safePaperTrades() {
   }
 }
 
+async function safePaperDecisions() {
+  try {
+    return await getLatestPaperDecisions(8);
+  } catch {
+    return [];
+  }
+}
+
 export default async function Home() {
   const signals = await safeSignals();
   const paperTrades = await safePaperTrades();
+  const paperDecisions = await safePaperDecisions();
 
   return (
     <main className="raven-shell">
@@ -93,7 +103,7 @@ export default async function Home() {
       <section className="main">
         <div className="topbar" id="overview">
           <div>
-            <div className="eyebrow">Phase 7A / Paper trade engine</div>
+            <div className="eyebrow">Phase 7B / Paper trade lifecycle</div>
             <h1>Private Raven signal board</h1>
           </div>
           <div className="top-actions">
@@ -117,7 +127,7 @@ export default async function Home() {
           <div className="kpi">
             <div className="kpi-label">Signal engine</div>
             <div className="kpi-value">90%</div>
-            <div className="kpi-note">Paper engine added</div>
+            <div className="kpi-note">Lifecycle added</div>
           </div>
           <div className="kpi">
             <div className="kpi-label">Paper trades</div>
@@ -179,6 +189,7 @@ export default async function Home() {
                   <a className="badge amber" href="/api/confirm/alpaca">confirm</a>
                   <a className="badge green" href="/api/score/signals">score</a>
                   <a className="badge green" href="/api/paper/trades">paper</a>
+                  <a className="badge blue" href="/api/paper/trades/review">review</a>
                 </div>
               </div>
 
@@ -255,9 +266,9 @@ export default async function Home() {
               <div className="panel-header">
                 <div>
                   <div className="panel-title">Paper trades</div>
-                  <div className="panel-meta">Only simulated trades Raven actually opened</div>
+                  <div className="panel-meta">Simulated trades Raven actually opened</div>
                 </div>
-                <a className="badge green" href="/api/paper/trades">run engine</a>
+                <div className="top-actions"><a className="badge green" href="/api/paper/trades">run engine</a><a className="badge blue" href="/api/paper/trades/review">review exits</a></div>
               </div>
               {paperTrades.length > 0 ? (
                 <div className="signal-list">
@@ -274,18 +285,56 @@ export default async function Home() {
                         <span>entry {trade.entry_price}</span>
                         <span>stop {trade.stop_price}</span>
                         <span>target {trade.target_price}</span>
+                        {trade.exit_price ? <span>exit {trade.exit_price}</span> : null}
+                        {trade.pnl_percent ? <span>p/l {trade.pnl_percent}%</span> : null}
                       </div>
-                      <p className="signal-copy">{trade.decision_reason}</p>
+                      <p className="signal-copy">{trade.status === "closed" ? `${trade.outcome || "closed"}: ${trade.close_reason || "reviewed"}` : trade.decision_reason}</p>
                     </article>
                   ))}
                 </div>
               ) : (
                 <div className="console">
                   PAPER_ENGINE: ready<br />
-                  ROUTE: /api/paper/trades<br />
-                  CURRENT RESULT: no paper trade opened until score and market confirmation pass rules<br />
-                  TELEGRAM: sends only if a paper trade opens<br />
+                  OPEN_ROUTE: /api/paper/trades<br />
+                  REVIEW_ROUTE: /api/paper/trades/review<br />
+                  TELEGRAM: sends only if a paper trade opens or closes<br />
                   LIVE_EXECUTION: disabled
+                </div>
+              )}
+            </section>
+
+            <section className="panel" style={{ marginTop: 14 }}>
+              <div className="panel-header">
+                <div>
+                  <div className="panel-title">Paper decisions</div>
+                  <div className="panel-meta">Recent trade / no-trade calls</div>
+                </div>
+              </div>
+              {paperDecisions.length > 0 ? (
+                <div className="signal-list">
+                  {paperDecisions.map((decision) => (
+                    <article className="signal-card" key={decision.accession_number}>
+                      <div className="signal-head">
+                        <div>
+                          <div className="signal-title">{decision.ticker} · {decision.decision}</div>
+                          <div className="panel-meta">{decision.action}</div>
+                        </div>
+                        <div className={`score ${scoreTone(decision.final_score)}`}>{decision.final_score}</div>
+                      </div>
+                      {Array.isArray(decision.reject_codes) && decision.reject_codes.length > 0 ? (
+                        <ul className="compact-list">
+                          {decision.reject_codes.slice(0, 4).map((reject) => <li key={reject}>{reject}</li>)}
+                        </ul>
+                      ) : (
+                        <p className="signal-copy">Trade decision passed.</p>
+                      )}
+                    </article>
+                  ))}
+                </div>
+              ) : (
+                <div className="console">
+                  No paper decisions logged yet.<br />
+                  Run /api/paper/trades after scoring signals.
                 </div>
               )}
             </section>
@@ -305,6 +354,7 @@ export default async function Home() {
                 SIGNAL_SCORING: /api/score/signals<br />
                 TELEGRAM_TEST: /api/alert/telegram?mode=test<br />
                 PAPER_ENGINE: /api/paper/trades<br />
+                PAPER_REVIEW: /api/paper/trades/review<br />
                 LIVE_EXECUTION: disabled
               </div>
             </section>
