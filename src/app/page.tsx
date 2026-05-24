@@ -8,19 +8,19 @@ const phases = [
   ["SEC EDGAR scanner", "Pull submissions and store raw filings."],
   ["AI classifier", "Summarize filings into strict signal JSON."],
   ["Alpaca confirmation", "Add price, volume, liquidity, and relative volume checks."],
-  ["Signal scoring", "Current build. Store scored events and readable verdicts in Postgres."],
-  ["Telegram alerts", "Send high-score alerts and morning reports."],
+  ["Signal scoring", "Store scored events and readable verdicts in Postgres."],
+  ["Telegram alerts", "Current build. Send scored signal alerts and test messages."],
   ["Dashboard signals", "Show real saved signals and filtering."],
   ["Paper trades", "Log simulated entries, exits, and results only."]
 ];
 
 const systemSignals = [
   {
-    title: "Phase 5 scoring engine wired",
+    title: "Phase 6 Telegram alerts wired",
     source: "RAVEN_SYSTEM",
     score: 55,
     tone: "blue",
-    copy: "Scoring route is ready at /api/score/signals. It turns AI analysis and market confirmation into readable Raven verdicts."
+    copy: "Telegram route is ready at /api/alert/telegram. It sends scored Raven signals to your private bot."
   },
   {
     title: "SEC + AI storage online",
@@ -83,7 +83,7 @@ export default async function Home() {
       <section className="main">
         <div className="topbar" id="overview">
           <div>
-            <div className="eyebrow">Phase 5 / signal scoring</div>
+            <div className="eyebrow">Phase 6 / Telegram alerts</div>
             <h1>Private Raven signal board</h1>
           </div>
           <div className="top-actions">
@@ -91,6 +91,7 @@ export default async function Home() {
             <span className="badge green">SEC stored</span>
             <span className="badge blue">AI route wired</span>
             <span className="badge green">Scoring route wired</span>
+            <span className="badge green">Telegram route wired</span>
             <form action="/api/logout" method="post">
               <button className="ghost-button" type="submit">Lock</button>
             </form>
@@ -105,8 +106,8 @@ export default async function Home() {
           </div>
           <div className="kpi">
             <div className="kpi-label">Signal engine</div>
-            <div className="kpi-value">70%</div>
-            <div className="kpi-note">Readable scoring route added</div>
+            <div className="kpi-value">85%</div>
+            <div className="kpi-note">Telegram alerts added</div>
           </div>
           <div className="kpi">
             <div className="kpi-label">Signals visible</div>
@@ -167,6 +168,7 @@ export default async function Home() {
                   <a className="badge green" href="/api/classify/sec">classify</a>
                   <a className="badge amber" href="/api/confirm/alpaca">confirm</a>
                   <a className="badge green" href="/api/score/signals">score</a>
+                  <a className="badge green" href="/api/alert/telegram">alert</a>
                 </div>
               </div>
 
@@ -233,7 +235,7 @@ export default async function Home() {
                       <div className="phase-name">{name}</div>
                       <div className="phase-note">{note}</div>
                     </div>
-                    <span className={`badge ${index <= 4 ? "green" : ""}`}>{index < 4 ? "done" : index === 4 ? "now" : "later"}</span>
+                    <span className={`badge ${index <= 5 ? "green" : ""}`}>{index < 5 ? "done" : index === 5 ? "now" : "later"}</span>
                   </div>
                 ))}
               </div>
@@ -247,11 +249,11 @@ export default async function Home() {
                 </div>
               </div>
               <div className="console">
-                RAVEN MORNING<br />
-                1. Weird signals: scored SEC events<br />
-                2. Insider activity: AI classified + market checked<br />
-                3. Dilution traps: score penalties applied<br />
-                4. Watchlist breakouts: next Telegram module<br />
+                RAVEN ALERTS<br />
+                1. Scored signals: Telegram-ready<br />
+                2. Test route: /api/alert/telegram?mode=test<br />
+                3. Signal route: /api/alert/telegram<br />
+                4. Duplicate alerts: logged and skipped<br />
                 5. Live trades: disabled
               </div>
             </section>
@@ -269,7 +271,7 @@ export default async function Home() {
                 AI_CLASSIFIER: /api/classify/sec<br />
                 ALPACA_MARKET_DATA: /api/confirm/alpaca<br />
                 SIGNAL_SCORING: /api/score/signals<br />
-                TELEGRAM_ALERTS: queued<br />
+                TELEGRAM_ALERTS: /api/alert/telegram<br />
                 LIVE_EXECUTION: disabled
               </div>
             </section>

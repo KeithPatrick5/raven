@@ -145,4 +145,24 @@ export async function ensureRavenTables() {
     on scored_signals (ticker, created_at desc)
   `;
 
+  await sql`
+    create table if not exists telegram_alerts (
+      id bigserial primary key,
+      scored_signal_id bigint references scored_signals(id) on delete cascade,
+      accession_number text,
+      ticker text,
+      alert_type text not null default 'signal',
+      telegram_chat_id text not null,
+      message text not null,
+      telegram_message_id bigint,
+      created_at timestamptz not null default now(),
+      unique(scored_signal_id, alert_type, telegram_chat_id)
+    )
+  `;
+
+  await sql`
+    create index if not exists telegram_alerts_created_idx
+    on telegram_alerts (created_at desc)
+  `;
+
 }
