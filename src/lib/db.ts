@@ -82,4 +82,32 @@ export async function ensureRavenTables() {
     create index if not exists sec_filing_summaries_tradeability_idx
     on sec_filing_summaries (tradeability desc, created_at desc)
   `;
+
+  await sql`
+    create table if not exists alpaca_market_confirmations (
+      id bigserial primary key,
+      summary_id bigint not null references sec_filing_summaries(id) on delete cascade,
+      accession_number text not null,
+      ticker text not null,
+      latest_close numeric,
+      previous_close numeric,
+      price_change_percent numeric,
+      latest_volume bigint,
+      avg_20d_volume bigint,
+      relative_volume numeric,
+      latest_bar_time timestamptz,
+      liquidity_status text not null,
+      price_status text not null,
+      confirmation_status text not null,
+      raw_payload jsonb not null,
+      created_at timestamptz not null default now(),
+      unique(summary_id)
+    )
+  `;
+
+  await sql`
+    create index if not exists alpaca_market_confirmations_ticker_created_idx
+    on alpaca_market_confirmations (ticker, created_at desc)
+  `;
+
 }

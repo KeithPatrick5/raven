@@ -1,4 +1,4 @@
-import { getLatestSecSummaries } from "@/lib/classifier";
+import { getLatestConfirmedSecSignals } from "@/lib/alpaca";
 import { watchlist } from "@/lib/watchlist";
 
 export const dynamic = "force-dynamic";
@@ -6,8 +6,8 @@ export const dynamic = "force-dynamic";
 const phases = [
   ["Dashboard/watchlist", "Private shell, dense UI, watchlist table."],
   ["SEC EDGAR scanner", "Pull submissions and store raw filings."],
-  ["AI classifier", "Current build. Summarize filings into strict signal JSON."],
-  ["Alpaca confirmation", "Add price, volume, liquidity, and relative volume checks."],
+  ["AI classifier", "Summarize filings into strict signal JSON."],
+  ["Alpaca confirmation", "Current build. Add price, volume, liquidity, and relative volume checks."],
   ["Signal scoring", "Store scored events and risk flags in Postgres."],
   ["Telegram alerts", "Send high-score alerts and morning reports."],
   ["Dashboard signals", "Show real saved signals and filtering."],
@@ -16,18 +16,18 @@ const phases = [
 
 const systemSignals = [
   {
-    title: "Phase 3 classifier wired",
+    title: "Phase 4 market confirmation wired",
     source: "RAVEN_SYSTEM",
-    score: 35,
+    score: 55,
     tone: "blue",
-    copy: "AI classification route is ready at /api/classify/sec. It reads unclassified raw SEC filings and stores signal summaries."
+    copy: "Alpaca confirmation route is ready at /api/confirm/alpaca. It adds latest close, move, volume, relative volume, and confirmation status."
   },
   {
-    title: "Raw SEC storage online",
+    title: "SEC + AI storage online",
     source: "POSTGRES",
-    score: 25,
+    score: 40,
     tone: "green",
-    copy: "Phase 2 storage is complete. Duplicate filings are skipped by accession number."
+    copy: "Raw SEC filings and AI classification summaries are stored. Duplicate filings and summaries are skipped."
   },
   {
     title: "Live trading disabled",
@@ -44,16 +44,16 @@ function scoreTone(score: number) {
   return "amber";
 }
 
-async function safeSummaries() {
+async function safeSignals() {
   try {
-    return await getLatestSecSummaries(6);
+    return await getLatestConfirmedSecSignals(6);
   } catch {
     return [];
   }
 }
 
 export default async function Home() {
-  const summaries = await safeSummaries();
+  const signals = await safeSignals();
 
   return (
     <main className="raven-shell">
@@ -83,13 +83,14 @@ export default async function Home() {
       <section className="main">
         <div className="topbar" id="overview">
           <div>
-            <div className="eyebrow">Phase 3 / AI filing classifier</div>
+            <div className="eyebrow">Phase 4 / Alpaca confirmation</div>
             <h1>Private Raven signal board</h1>
           </div>
           <div className="top-actions">
             <span className="badge green">Vercel-ready</span>
             <span className="badge green">SEC stored</span>
             <span className="badge blue">AI route wired</span>
+            <span className="badge amber">Alpaca pending keys</span>
             <form action="/api/logout" method="post">
               <button className="ghost-button" type="submit">Lock</button>
             </form>
@@ -104,13 +105,13 @@ export default async function Home() {
           </div>
           <div className="kpi">
             <div className="kpi-label">Signal engine</div>
-            <div className="kpi-value">40%</div>
-            <div className="kpi-note">AI classifier online</div>
+            <div className="kpi-value">55%</div>
+            <div className="kpi-note">Market confirmation route added</div>
           </div>
           <div className="kpi">
-            <div className="kpi-label">Classified filings</div>
-            <div className="kpi-value">{summaries.length}</div>
-            <div className="kpi-note">Latest visible</div>
+            <div className="kpi-label">Signals visible</div>
+            <div className="kpi-value">{signals.length}</div>
+            <div className="kpi-note">AI + market rows</div>
           </div>
           <div className="kpi">
             <div className="kpi-label">Live trading</div>
@@ -158,18 +159,19 @@ export default async function Home() {
             <section className="panel" id="signals" style={{ marginTop: 14 }}>
               <div className="panel-header">
                 <div>
-                  <div className="panel-title">AI filing signals</div>
-                  <div className="panel-meta">Classified SEC filings from Postgres</div>
+                  <div className="panel-title">AI + market signals</div>
+                  <div className="panel-meta">SEC classifications with Alpaca confirmation when available</div>
                 </div>
                 <div className="top-actions">
                   <a className="badge blue" href="/api/scan/sec">run scan</a>
                   <a className="badge green" href="/api/classify/sec">classify</a>
+                  <a className="badge amber" href="/api/confirm/alpaca">confirm</a>
                 </div>
               </div>
 
-              {summaries.length > 0 ? (
+              {signals.length > 0 ? (
                 <div className="signal-list">
-                  {summaries.map((signal) => (
+                  {signals.map((signal) => (
                     <article className="signal-card" key={signal.accession_number}>
                       <div className="signal-head">
                         <div>
@@ -179,6 +181,12 @@ export default async function Home() {
                         <div className={`score ${scoreTone(signal.tradeability)}`}>{signal.tradeability}</div>
                       </div>
                       <p className="signal-copy">{signal.summary}</p>
+                      <div className="market-strip">
+                        <span>close {signal.latest_close === null ? "--" : `$${Number(signal.latest_close).toFixed(2)}`}</span>
+                        <span>move {signal.price_change_percent === null ? "--" : `${Number(signal.price_change_percent).toFixed(2)}%`}</span>
+                        <span>rel vol {signal.relative_volume === null ? "--" : `${Number(signal.relative_volume).toFixed(2)}x`}</span>
+                        <span>{signal.confirmation_status || "unconfirmed"}</span>
+                      </div>
                       <p className="signal-copy"><strong>Bull:</strong> {signal.bull_case}</p>
                       <p className="signal-copy"><strong>Bear:</strong> {signal.bear_case}</p>
                     </article>
@@ -219,7 +227,7 @@ export default async function Home() {
                       <div className="phase-name">{name}</div>
                       <div className="phase-note">{note}</div>
                     </div>
-                    <span className={`badge ${index <= 2 ? "green" : ""}`}>{index < 2 ? "done" : index === 2 ? "now" : "later"}</span>
+                    <span className={`badge ${index <= 3 ? "green" : ""}`}>{index < 3 ? "done" : index === 3 ? "now" : "later"}</span>
                   </div>
                 ))}
               </div>
@@ -234,10 +242,10 @@ export default async function Home() {
               </div>
               <div className="console">
                 RAVEN MORNING<br />
-                1. Weird signals: SEC + AI classifier<br />
+                1. Weird signals: SEC + AI + price/volume<br />
                 2. Insider buys: Form 4 summaries live<br />
                 3. Dilution traps: classifier flags risk<br />
-                4. Watchlist breakouts: pending Alpaca<br />
+                4. Watchlist breakouts: Alpaca confirmation route<br />
                 5. Live trades: disabled
               </div>
             </section>
@@ -253,7 +261,7 @@ export default async function Home() {
                 SEC_EDGAR: wired<br />
                 POSTGRES: configured<br />
                 AI_CLASSIFIER: /api/classify/sec<br />
-                ALPACA_MARKET_DATA: queued<br />
+                ALPACA_MARKET_DATA: /api/confirm/alpaca<br />
                 TELEGRAM_ALERTS: queued<br />
                 LIVE_EXECUTION: disabled
               </div>

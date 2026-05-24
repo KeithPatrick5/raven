@@ -441,3 +441,20 @@ h1 {
 .score.amber { color: var(--amber); }
 .score.green { color: var(--green); }
 .score.red { color: var(--red); }
+
+.market-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin: 9px 0;
+}
+
+.market-strip span {
+  border: 1px solid var(--line-soft);
+  background: rgba(3, 5, 8, 0.48);
+  color: #8ba0b2;
+  font-size: 11px;
+  padding: 3px 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
