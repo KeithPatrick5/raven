@@ -11,10 +11,23 @@ function isPublicPath(pathname: string): boolean {
   );
 }
 
+function hasValidCronSecret(request: NextRequest): boolean {
+  const cronSecret = process.env.RAVEN_CRON_SECRET?.trim();
+
+  if (!cronSecret || !request.nextUrl.pathname.startsWith("/api/scan")) {
+    return false;
+  }
+
+  const querySecret = request.nextUrl.searchParams.get("secret")?.trim();
+  const headerSecret = request.headers.get("x-raven-cron-secret")?.trim();
+
+  return querySecret === cronSecret || headerSecret === cronSecret;
+}
+
 export async function middleware(request: NextRequest) {
   const accessKey = getAccessKey();
 
-  if (!accessKey || isPublicPath(request.nextUrl.pathname)) {
+  if (!accessKey || isPublicPath(request.nextUrl.pathname) || hasValidCronSecret(request)) {
     return NextResponse.next();
   }
 

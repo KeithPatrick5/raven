@@ -1,53 +1,56 @@
 # Raven
 
-Private AI trading scanner/bot for personal use only.
+Private AI trading scanner for public market signals.
 
-## Phase 1 included
+## Current phase
 
-- Vercel-ready Next.js app
-- Dark dense Raven dashboard shell
-- Watchlist table with seed tickers
-- Mock signal feed placeholders
-- Locked build-phase panel
-- Optional private passcode gate using `RAVEN_ACCESS_KEY`
-- No scanner, no Alpaca, no SEC logic yet
+Phase 2 is wired:
 
-## Bible
+- Private dashboard/watchlist shell
+- SEC EDGAR scanner API route
+- Optional Postgres raw filing storage
+- Vercel-first architecture
+- Live trading disabled
 
-Use Vercel for everything now. Do not require a VPS. Migrate scanner/workers to a VPS later only when one is available.
+## Scanner route
 
-Raven starts as a scheduled public-signal scanner. AI is the analyst, not the trader. Live trading is disabled by default and comes later only after paper trading proves useful.
+After logging in, visit:
 
-## Optional Vercel environment variables
-
-Set these in Vercel if you want the dashboard protected by a passcode:
-
-```bash
-RAVEN_ACCESS_KEY=your-private-passcode
-RAVEN_SESSION_SALT=a-long-random-string
+```text
+/api/scan/sec
 ```
 
-If `RAVEN_ACCESS_KEY` is not set, the dashboard is open. That is useful for local testing but not recommended once deployed.
+The route scans the seed watchlist, fetches recent SEC submissions, and returns normalized filings.
 
-## Later env variables
+When `DATABASE_URL` is configured, Raven creates `raw_sec_filings` and inserts filings by accession number.
 
-```bash
+## Required env vars
+
+```text
+RAVEN_ACCESS_KEY=
+RAVEN_SESSION_SALT=
+```
+
+## Optional env vars
+
+```text
+RAVEN_CRON_SECRET=
 DATABASE_URL=
-ALPACA_API_KEY=
-ALPACA_SECRET_KEY=
-ALPACA_PAPER_BASE_URL=https://paper-api.alpaca.markets
-TELEGRAM_BOT_TOKEN=
-TELEGRAM_CHAT_ID=
-AI_PROVIDER_API_KEY=
+SEC_USER_AGENT=
 ```
 
-## Local commands
+Use `RAVEN_CRON_SECRET` later for external cron pings:
 
-```bash
-npm install
-npm run dev
+```text
+/api/scan/sec?secret=YOUR_SECRET
 ```
 
-## Deploy path
+## Locked Raven rules
 
-Create a GitHub repo, push this project, then import the repo into Vercel.
+- Vercel first
+- No VPS dependency now
+- SEC EDGAR first
+- Alpaca confirmation later
+- AI is the analyst, not the trader
+- Alerts and paper trades before live trading
+- Live trading disabled by default

@@ -1,25 +1,19 @@
-const watchlist = [
-  { symbol: "TSLA", focus: "8-K / delivery risk", lastSignal: "No fresh filing", status: "Watching", score: "--" },
-  { symbol: "PLTR", focus: "contract language", lastSignal: "Volume normal", status: "Watching", score: "--" },
-  { symbol: "SOFI", focus: "earnings / guidance", lastSignal: "SEC quiet", status: "Watching", score: "--" },
-  { symbol: "DNA", focus: "dilution traps", lastSignal: "Needs scanner", status: "Queued", score: "--" },
-  { symbol: "IONQ", focus: "hype vs filings", lastSignal: "Needs scanner", status: "Queued", score: "--" }
-];
+import { watchlist } from "@/lib/watchlist";
 
 const signals = [
   {
-    title: "Phase 1 shell online",
+    title: "Phase 2 SEC scanner wired",
     source: "RAVEN_SYSTEM",
     score: 12,
     tone: "blue",
-    copy: "Dashboard and watchlist shell are ready. Scanner, database, Alpaca, and Telegram are intentionally not wired yet."
+    copy: "SEC EDGAR route is ready at /api/scan/sec. It can fetch recent watched-ticker filings and store them when DATABASE_URL is configured."
   },
   {
-    title: "SEC EDGAR scanner pending",
+    title: "Raw filing storage ready",
     source: "NEXT_PHASE",
     score: 0,
     tone: "amber",
-    copy: "Next build adds the scheduled API route that pulls company submissions and stores raw filings."
+    copy: "Scanner creates the raw_sec_filings table automatically when a Postgres DATABASE_URL is added."
   },
   {
     title: "Live trading disabled",
@@ -31,8 +25,8 @@ const signals = [
 ];
 
 const phases = [
-  ["Dashboard/watchlist", "Current build. Private shell, dense UI, watchlist table."],
-  ["SEC EDGAR scanner", "Pull submissions for watched tickers and store raw filings."],
+  ["Dashboard/watchlist", "Private shell, dense UI, watchlist table."],
+  ["SEC EDGAR scanner", "Current build. Pull submissions and store raw filings."],
   ["AI classifier", "Summarize filings into strict signal JSON."],
   ["Alpaca confirmation", "Add price, volume, liquidity, and relative volume checks."],
   ["Signal scoring", "Store scored events and risk flags in Postgres."],
@@ -56,8 +50,8 @@ export default function Home() {
         <nav className="nav" aria-label="Raven navigation">
           <a className="nav-item active" href="#overview">Overview <span className="nav-pill">live</span></a>
           <a className="nav-item" href="#watchlist">Watchlist <span className="nav-pill">v1</span></a>
-          <a className="nav-item" href="#signals">Signals <span className="nav-pill">mock</span></a>
-          <a className="nav-item" href="#sources">Sources <span className="nav-pill">planned</span></a>
+          <a className="nav-item" href="#signals">Signals <span className="nav-pill">system</span></a>
+          <a className="nav-item" href="#sources">Sources <span className="nav-pill">SEC</span></a>
           <a className="nav-item" href="#paper">Paper Trades <span className="nav-pill">locked</span></a>
           <a className="nav-item" href="#settings">Settings <span className="nav-pill">soon</span></a>
         </nav>
@@ -70,12 +64,12 @@ export default function Home() {
       <section className="main">
         <div className="topbar" id="overview">
           <div>
-            <div className="eyebrow">Phase 1 / Vercel-first bible</div>
-            <h1>Private Raven command board</h1>
+            <div className="eyebrow">Phase 2 / SEC EDGAR scanner</div>
+            <h1>Private Raven signal board</h1>
           </div>
           <div className="top-actions">
             <span className="badge green">Vercel-ready</span>
-            <span className="badge amber">Scanner not wired</span>
+            <span className="badge green">SEC scanner wired</span>
             <form action="/api/logout" method="post">
               <button className="ghost-button" type="submit">Lock</button>
             </form>
@@ -90,8 +84,8 @@ export default function Home() {
           </div>
           <div className="kpi">
             <div className="kpi-label">Signal engine</div>
-            <div className="kpi-value">0%</div>
-            <div className="kpi-note">Phase 2 starts SEC</div>
+            <div className="kpi-value">25%</div>
+            <div className="kpi-note">SEC route online</div>
           </div>
           <div className="kpi">
             <div className="kpi-label">Live trading</div>
@@ -145,9 +139,9 @@ export default function Home() {
               <div className="panel-header">
                 <div>
                   <div className="panel-title">Signal feed</div>
-                  <div className="panel-meta">Mock feed until SEC scanner lands</div>
+                  <div className="panel-meta">System feed until saved signals land</div>
                 </div>
-                <span className="badge amber">mock data</span>
+                <a className="badge blue" href="/api/scan/sec">run scan</a>
               </div>
               <div className="signal-list">
                 {signals.map((signal) => (
@@ -182,7 +176,7 @@ export default function Home() {
                       <div className="phase-name">{name}</div>
                       <div className="phase-note">{note}</div>
                     </div>
-                    <span className={`badge ${index === 0 ? "green" : ""}`}>{index === 0 ? "now" : "later"}</span>
+                    <span className={`badge ${index <= 1 ? "green" : ""}`}>{index === 0 ? "done" : index === 1 ? "now" : "later"}</span>
                   </div>
                 ))}
               </div>
@@ -197,7 +191,7 @@ export default function Home() {
               </div>
               <div className="console">
                 RAVEN MORNING<br />
-                1. Weird signals: pending SEC scanner<br />
+                1. Weird signals: SEC scanner ready<br />
                 2. Insider buys: later module<br />
                 3. Dilution traps: later module<br />
                 4. Watchlist breakouts: pending Alpaca<br />
@@ -213,9 +207,9 @@ export default function Home() {
                 </div>
               </div>
               <div className="console">
-                SEC_EDGAR: next<br />
+                SEC_EDGAR: wired<br />
                 ALPACA_MARKET_DATA: queued<br />
-                POSTGRES: queued<br />
+                POSTGRES: optional DATABASE_URL<br />
                 TELEGRAM_ALERTS: queued<br />
                 FINRA_SHORT_VOLUME: later<br />
                 FEDERAL_REGISTER: later<br />
