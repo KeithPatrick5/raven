@@ -4,5 +4,7 @@
       "path": "/api/run",
       "schedule": "*/15 13-20 * * 1-5"
     }
-  ]
+  ],
+  "installCommand": "npm ci --no-audit --no-fund",
+  "buildCommand": "npm run build"
 }
