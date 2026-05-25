@@ -22,6 +22,11 @@ type PendingScoringRow = {
   liquidity_status: string | null;
   price_status: string | null;
   confirmation_status: string | null;
+  raven_priority: string | null;
+  raven_priority_score: number | null;
+  raven_materiality: string | null;
+  raven_form_family: string | null;
+  raven_is_routine_form4: boolean | null;
 };
 
 function clampScore(value: number) {
@@ -32,6 +37,43 @@ function asNumber(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value === "string" && value.trim() && Number.isFinite(Number(value))) return Number(value);
   return null;
+}
+
+
+function filingPriorityImpact(row: PendingScoringRow) {
+  const priority = (row.raven_priority || "").toLowerCase();
+  const score = asNumber(row.raven_priority_score);
+  const routineForm4 = Boolean(row.raven_is_routine_form4);
+
+  if (routineForm4) return -18;
+  if (priority === "critical") return 22;
+  if (priority === "high") return 14;
+  if (priority === "medium") return 4;
+  if (priority === "low") return -8;
+  if (priority === "noise") return -22;
+  if (score !== null) {
+    if (score >= 90) return 18;
+    if (score >= 75) return 12;
+    if (score <= 15) return -18;
+  }
+  return 0;
+}
+
+function formImpact(row: PendingScoringRow) {
+  const form = row.form.toUpperCase();
+  const category = row.category.toLowerCase();
+
+  if (["424B5", "S-1", "S-3"].includes(form) || category.includes("dilution") || category.includes("offering") || category.includes("shelf")) {
+    return row.direction.toLowerCase() === "bearish" ? 10 : -10;
+  }
+
+  if (form.includes("13D") || category.includes("activist")) return 12;
+  if (form === "8-K") return 8;
+  if (form === "4" && category.includes("routine")) return -18;
+  if (form === "4" && category.includes("insider_sell")) return -10;
+  if (form === "4" && category.includes("insider_buy")) return 10;
+
+  return 0;
 }
 
 function categoryImpact(category: string) {
@@ -133,6 +175,9 @@ function reasonsFor(row: PendingScoringRow, score: number) {
   reasons.push(`AI tradeability starts at ${row.tradeability}/100.`);
   reasons.push(`${row.category} / ${row.direction} / ${row.risk_level} risk.`);
 
+  if (row.raven_priority) reasons.push(`Filing priority is ${row.raven_priority}${row.raven_priority_score !== null ? ` (${row.raven_priority_score}/100)` : ""}.`);
+  if (row.raven_is_routine_form4) reasons.push("Routine Form 4 detected, so Raven penalized it hard.");
+  if (row.raven_form_family) reasons.push(`Filing family: ${row.raven_form_family}.`);
   if (row.confirmation_status) reasons.push(`Market confirmation is ${row.confirmation_status}.`);
   if (relativeVolume !== null) reasons.push(`Relative volume is ${relativeVolume.toFixed(2)}x.`);
   if (priceMove !== null) reasons.push(`Latest price move is ${priceMove.toFixed(2)}%.`);
@@ -149,6 +194,7 @@ function risksFor(row: PendingScoringRow) {
   const category = row.category.toLowerCase();
   const risk = row.risk_level.toLowerCase();
 
+  if (row.raven_is_routine_form4) risks.push("Routine Form 4 noise. Usually not worth a trade unless price/volume suddenly confirms.");
   if (category.includes("insider_sell")) risks.push("Insider sale may be routine, tax-related, or 10b5-1 noise.");
   if (category.includes("dilution") || category.includes("offering") || category.includes("shelf")) risks.push("Dilution or offering language can wreck bullish momentum.");
   if (risk.includes("high")) risks.push("AI marked this as high risk. Do not chase without strong confirmation.");
@@ -164,6 +210,8 @@ function scoreRow(row: PendingScoringRow) {
   const priceChange = asNumber(row.price_change_percent);
   let score = row.tradeability;
 
+  score += filingPriorityImpact(row);
+  score += formImpact(row);
   score += categoryImpact(row.category);
   score += riskPenalty(row.risk_level);
   score += confirmationImpact(row.confirmation_status);
@@ -207,8 +255,15 @@ async function getPendingRows(limit: number): Promise<PendingScoringRow[]> {
       c.relative_volume,
       c.liquidity_status,
       c.price_status,
-      c.confirmation_status
+      c.confirmation_status,
+      r.raw_payload->>'ravenPriority' as raven_priority,
+      nullif(r.raw_payload->>'ravenPriorityScore', '')::integer as raven_priority_score,
+      r.raw_payload->>'ravenMateriality' as raven_materiality,
+      r.raw_payload->>'ravenFormFamily' as raven_form_family,
+      nullif(r.raw_payload->>'ravenIsRoutineForm4', '')::boolean as raven_is_routine_form4
     from sec_filing_summaries s
+    left join raw_sec_filings r
+      on r.id = s.raw_filing_id
     left join alpaca_market_confirmations c
       on c.summary_id = s.id
     left join scored_signals scored
@@ -264,6 +319,13 @@ async function saveScore(row: PendingScoringRow) {
           verdict: row.verdict,
           bullCase: row.bull_case,
           bearCase: row.bear_case
+        },
+        filingIntelligence: {
+          priority: row.raven_priority,
+          priorityScore: row.raven_priority_score,
+          materiality: row.raven_materiality,
+          formFamily: row.raven_form_family,
+          routineForm4: row.raven_is_routine_form4
         },
         market: {
           latestClose: row.latest_close,

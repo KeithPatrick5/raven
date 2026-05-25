@@ -1,3 +1,4 @@
+import { analyzeFilingPriority } from "@/lib/filingIntelligence";
 import { watchlist } from "@/lib/watchlist";
 
 export type SecTickerMatch = {
@@ -17,6 +18,11 @@ export type NormalizedSecFiling = {
   primaryDocument: string | null;
   primaryDocumentUrl: string | null;
   sourceUrl: string;
+  priority: string;
+  priorityScore: number;
+  materiality: string;
+  formFamily: string;
+  priorityReasons: string[];
   rawPayload: Record<string, unknown>;
 };
 
@@ -121,6 +127,12 @@ export async function getRecentFilingsForTicker(symbol: string, limit = 8): Prom
 
     const accessionNumber = String(recent.accessionNumber[index]);
     const primaryDocument = recent.primaryDocument?.[index] ? String(recent.primaryDocument[index]) : null;
+    const priority = analyzeFilingPriority({
+      form,
+      primaryDocument,
+      primaryDocDescription: recent.primaryDocDescription?.[index] || null,
+      items: recent.items?.[index] || null
+    });
 
     filings.push({
       ticker: symbol.toUpperCase(),
@@ -133,7 +145,19 @@ export async function getRecentFilingsForTicker(symbol: string, limit = 8): Prom
       primaryDocument,
       primaryDocumentUrl: primaryDocumentUrl(cik, accessionNumber, primaryDocument),
       sourceUrl,
+      priority: priority.priority,
+      priorityScore: priority.priorityScore,
+      materiality: priority.materiality,
+      formFamily: priority.formFamily,
+      priorityReasons: priority.reasons,
       rawPayload: {
+        ravenPriority: priority.priority,
+        ravenPriorityScore: priority.priorityScore,
+        ravenMateriality: priority.materiality,
+        ravenFormFamily: priority.formFamily,
+        ravenIsRoutineForm4: priority.isRoutineForm4,
+        ravenShouldClassify: priority.shouldClassify,
+        ravenPriorityReasons: priority.reasons,
         accessionNumber,
         form,
         filingDate: recent.filingDate?.[index] || null,
@@ -170,6 +194,8 @@ export async function scanWatchlistSecFilings() {
       });
     }
   }
+
+  results.sort((a, b) => b.priorityScore - a.priorityScore || String(b.filingDate || "").localeCompare(String(a.filingDate || "")));
 
   return { filings: results, errors };
 }

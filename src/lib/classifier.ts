@@ -1,4 +1,5 @@
 import { classifySecFilingWithAi, hasAiProvider } from "@/lib/ai";
+import { analyzeFilingPriority } from "@/lib/filingIntelligence";
 import { db, ensureRavenTables, hasDatabase } from "@/lib/db";
 
 type RawSecFilingRow = {
@@ -13,6 +14,10 @@ type RawSecFilingRow = {
   primary_document_url: string | null;
   source_url: string;
   raw_payload: Record<string, unknown> | null;
+  raven_priority: string | null;
+  raven_priority_score: number | null;
+  raven_materiality: string | null;
+  raven_form_family: string | null;
 };
 
 function stripFilingText(input: string): string {
@@ -61,12 +66,19 @@ async function getPendingRawFilings(limit: number): Promise<RawSecFilingRow[]> {
       raw_sec_filings.primary_document,
       raw_sec_filings.primary_document_url,
       raw_sec_filings.source_url,
-      raw_sec_filings.raw_payload
+      raw_sec_filings.raw_payload,
+      raw_sec_filings.raw_payload->>'ravenPriority' as raven_priority,
+      nullif(raw_sec_filings.raw_payload->>'ravenPriorityScore', '')::integer as raven_priority_score,
+      raw_sec_filings.raw_payload->>'ravenMateriality' as raven_materiality,
+      raw_sec_filings.raw_payload->>'ravenFormFamily' as raven_form_family
     from raw_sec_filings
     left join sec_filing_summaries
       on sec_filing_summaries.raw_filing_id = raw_sec_filings.id
     where sec_filing_summaries.id is null
-    order by raw_sec_filings.filing_date desc nulls last, raw_sec_filings.id desc
+    order by
+      coalesce(nullif(raw_sec_filings.raw_payload->>'ravenPriorityScore', '')::integer, 0) desc,
+      raw_sec_filings.filing_date desc nulls last,
+      raw_sec_filings.id desc
     limit ${limit}
   `;
 
@@ -154,6 +166,13 @@ export async function classifyPendingSecFilings(limit = 4) {
   for (const row of pending) {
     try {
       const filingText = await fetchFilingText(row.primary_document_url);
+      const priority = analyzeFilingPriority({
+        form: row.form,
+        primaryDocument: row.primary_document,
+        primaryDocDescription: typeof row.raw_payload?.primaryDocDescription === "string" ? row.raw_payload.primaryDocDescription : null,
+        items: typeof row.raw_payload?.items === "string" ? row.raw_payload.items : null,
+        rawPayload: row.raw_payload
+      });
       const result = await classifySecFilingWithAi({
         ticker: row.ticker,
         companyName: typeof row.raw_payload?.companyName === "string" ? row.raw_payload.companyName : undefined,
@@ -162,7 +181,11 @@ export async function classifyPendingSecFilings(limit = 4) {
         reportDate: row.report_date,
         accessionNumber: row.accession_number,
         primaryDocumentUrl: row.primary_document_url,
-        filingText
+        filingText,
+        priority: row.raven_priority || priority.priority,
+        priorityScore: row.raven_priority_score || priority.priorityScore,
+        materiality: row.raven_materiality || priority.materiality,
+        formFamily: row.raven_form_family || priority.formFamily
       });
 
       await saveClassification(row, result);
@@ -171,6 +194,10 @@ export async function classifyPendingSecFilings(limit = 4) {
         accessionNumber: row.accession_number,
         form: row.form,
         filingDate: row.filing_date,
+        priority: row.raven_priority || priority.priority,
+        priorityScore: row.raven_priority_score || priority.priorityScore,
+        materiality: row.raven_materiality || priority.materiality,
+        formFamily: row.raven_form_family || priority.formFamily,
         ...result.classification
       });
     } catch (error) {

@@ -72,6 +72,10 @@ export async function classifySecFilingWithAi(input: {
   accessionNumber: string;
   primaryDocumentUrl: string | null;
   filingText: string;
+  priority?: string;
+  priorityScore?: number;
+  materiality?: string;
+  formFamily?: string;
 }): Promise<{ classification: SecFilingClassification; raw: Record<string, unknown>; model: string }> {
   const apiKey = process.env.GROQ_API_KEY?.trim();
 
@@ -82,7 +86,7 @@ export async function classifySecFilingWithAi(input: {
   const model = aiModel();
   const filingText = input.filingText.slice(0, 6500);
 
-  const prompt = `You are Raven, a cynical market filing analyst. Classify this public SEC filing for a private signal scanner. Do not hype trades. Separate useful public signal from noise. Return JSON only.\n\nRequired JSON shape:\n{\n  "direction": "bullish | bearish | neutral | mixed",\n  "category": "short category like insider_buy, dilution_risk, earnings, material_agreement, ownership, routine",\n  "risk_level": "low | medium | high | extreme",\n  "tradeability": 0-100,\n  "summary": "plain English filing summary in 1-2 short sentences",\n  "bull_case": "short bull case",\n  "bear_case": "short bear case",\n  "verdict": "ignore | watch | paper_trade_candidate | avoid",\n  "confirmation_needed": ["price/volume or filing confirmations needed"],\n  "avoid_if": ["conditions that invalidate or make it dangerous"]\n}\n\nFiling metadata:\nTicker: ${input.ticker}\nCompany: ${input.companyName || "unknown"}\nForm: ${input.form}\nFiling date: ${input.filingDate || "unknown"}\nReport date: ${input.reportDate || "unknown"}\nAccession: ${input.accessionNumber}\nDocument URL: ${input.primaryDocumentUrl || "none"}\n\nFiling text excerpt:\n${filingText}`;
+  const prompt = `You are Raven, a cynical market filing analyst. Classify this public SEC filing for a private signal scanner. Do not hype trades. Separate useful public signal from noise. Return JSON only.\n\nRequired JSON shape:\n{\n  "direction": "bullish | bearish | neutral | mixed",\n  "category": "short category like insider_buy, dilution_risk, earnings, material_agreement, ownership, routine",\n  "risk_level": "low | medium | high | extreme",\n  "tradeability": 0-100,\n  "summary": "plain English filing summary in 1-2 short sentences",\n  "bull_case": "short bull case",\n  "bear_case": "short bear case",\n  "verdict": "ignore | watch | paper_trade_candidate | avoid",\n  "confirmation_needed": ["price/volume or filing confirmations needed"],\n  "avoid_if": ["conditions that invalidate or make it dangerous"]\n}\n\nFiling metadata:\nTicker: ${input.ticker}\nCompany: ${input.companyName || "unknown"}\nForm: ${input.form}\nFiling date: ${input.filingDate || "unknown"}\nReport date: ${input.reportDate || "unknown"}\nAccession: ${input.accessionNumber}\nDocument URL: ${input.primaryDocumentUrl || "none"}\nRaven priority: ${input.priority || "unknown"} (${input.priorityScore ?? "n/a"}/100)\nRaven materiality: ${input.materiality || "unknown"}\nRaven form family: ${input.formFamily || "unknown"}\n\nClassification rules:\n- Routine Form 4 tax/RSU/10b5-1 sales should usually be category routine_insider_noise, verdict ignore, tradeability 0-25.\n- Real open-market CEO/CFO insider buys can be category insider_buy and should score higher if material.\n- 8-K material agreements, 13D activism, S-3/S-1/424B5 offerings, late filings, delisting, defaults, auditor changes, and going-concern language matter more than routine insider paperwork.\n- If a filing is legally important but not tradeable yet, classify it as watch, not paper_trade_candidate.\n\nFiling text excerpt:\n${filingText}`;
 
   const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
