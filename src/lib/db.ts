@@ -148,6 +148,38 @@ export async function ensureRavenTables() {
 
 
   await sql`
+    create table if not exists raw_sec_discovery_filings (
+      id bigserial primary key,
+      source_id text not null unique,
+      ticker text not null,
+      cik text not null,
+      company_name text not null,
+      form text not null,
+      accession_number text not null,
+      filing_date date,
+      filing_url text,
+      priority text not null default 'unknown',
+      priority_score integer not null default 0,
+      materiality text not null default 'unknown',
+      form_family text not null default 'unknown',
+      raw_payload jsonb not null default '{}'::jsonb,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now()
+    )
+  `;
+
+  await sql`
+    create index if not exists raw_sec_discovery_filings_ticker_date_idx
+    on raw_sec_discovery_filings (ticker, filing_date desc)
+  `;
+
+  await sql`
+    create index if not exists raw_sec_discovery_filings_priority_idx
+    on raw_sec_discovery_filings (priority_score desc, created_at desc)
+  `;
+
+
+  await sql`
     create table if not exists signal_events (
       id bigserial primary key,
       source text not null,

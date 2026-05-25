@@ -26,7 +26,7 @@ function statusTone(status: string) {
 }
 
 function sourceTone(source: string) {
-  if (source === "SEC") return "green";
+  if (source === "SEC" || source === "SEC_DISCOVERY") return "green";
   if (source === "FINRA") return "amber";
   if (source === "FED_REG" || source === "FDA") return "blue";
   if (source === "CONGRESS" || source === "NEWS") return "blue";
@@ -35,6 +35,7 @@ function sourceTone(source: string) {
 
 function sourceLabel(source: string) {
   if (source === "FED_REG") return "FED REG";
+  if (source === "SEC_DISCOVERY") return "SEC DISC";
   return source;
 }
 
@@ -445,7 +446,7 @@ export default async function Home() {
               <div className="panel-header">
                 <div>
                   <div className="panel-title">Raven radar</div>
-                  <div className="panel-meta">Temporary active tickers from source clusters</div>
+                  <div className="panel-meta">Core watchlist plus discovered tickers</div>
                 </div>
                 <span className="badge blue">{radarTickers.length} active</span>
               </div>
@@ -462,7 +463,7 @@ export default async function Home() {
                             <div className="signal-title">{item.ticker} · {core ? "core watchlist" : "radar"}</div>
                             <div className="panel-meta">Last seen {shortDate(item.last_seen)} · expires {shortDate(item.expires_at)}</div>
                           </div>
-                          <div className={`score ${scoreTone(item.score)}`}>{item.score}</div>
+                          <div className={`score ${scoreTone(item.score)}`} title="Attention score, not trade score">{item.score}</div>
                         </div>
                         <div className="source-row">
                           {sources.slice(0, 5).map((source) => (

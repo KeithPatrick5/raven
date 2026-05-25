@@ -1,7 +1,7 @@
 import { db, ensureRavenTables, hasDatabase } from "@/lib/db";
 import { analyzeFilingPriority } from "@/lib/filingIntelligence";
 
-export type SignalSource = "SEC" | "FINRA" | "FED_REG" | "FDA" | "CONGRESS" | "NEWS";
+export type SignalSource = "SEC" | "SEC_DISCOVERY" | "FINRA" | "FED_REG" | "FDA" | "CONGRESS" | "NEWS";
 
 export type SignalEvent = {
   id: number;
@@ -345,6 +345,7 @@ export async function getLatestSignalEvents(limit = 12) {
 export async function getSignalSourceHealth() {
   const sources: Array<{ source: SignalSource; label: string; status: string; count: number; latest: string | null }> = [
     { source: "SEC", label: "SEC", status: "idle", count: 0, latest: null },
+    { source: "SEC_DISCOVERY", label: "SEC Discovery", status: "queued", count: 0, latest: null },
     { source: "FINRA", label: "FINRA", status: "queued", count: 0, latest: null },
     { source: "FED_REG", label: "Federal Register", status: "queued", count: 0, latest: null },
     { source: "FDA", label: "FDA", status: "queued", count: 0, latest: null },

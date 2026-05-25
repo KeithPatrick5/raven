@@ -68,8 +68,8 @@ function sourceStepLine(run: PipelineLike, name: string, label: string) {
   const data = asObject(found.result);
   const errors = asArray(data.errors).length;
   const partialErrors = asArray(data.partialErrors).length;
-  const signalCount = num(data.signalCount);
-  const rawCount = num(data.rawArticleCount) || num(data.rawEventCount) || num(data.rawCandidateCount) || num(data.rowCount);
+  const signalCount = num(data.signalCount) || num(data.mappedSignalCount);
+  const rawCount = num(data.rawArticleCount) || num(data.rawEventCount) || num(data.rawCandidateCount) || num(data.rawEntryCount) || num(data.rowCount);
   const suppressed = num(data.weakMatchesSuppressed);
 
   if (name === "radar_sync") {
@@ -191,6 +191,7 @@ export function buildPipelineTextReport(run: PipelineLike) {
 
   const topSignals = [
     ...topSignalsFromStep(run, "score_signals", "SEC", 3),
+    ...topSignalsFromStep(run, "sec_discovery_radar", "SEC DISC", 3),
     ...topSignalsFromStep(run, "news", "NEWS", 3),
     ...topSignalsFromStep(run, "federal_register", "FED REG", 2),
     ...topSignalsFromStep(run, "finra_short_volume", "FINRA", 2)
@@ -226,6 +227,7 @@ export function buildPipelineTextReport(run: PipelineLike) {
     sourceStepLine(run, "fda", "FDA"),
     sourceStepLine(run, "congress", "Congress"),
     sourceStepLine(run, "news", "News"),
+    sourceStepLine(run, "sec_discovery_radar", "SEC Discovery"),
     sourceStepLine(run, "radar_sync", "Radar"),
     "",
     "TOP SIGNALS THIS RUN",
