@@ -59,7 +59,6 @@ function parseList(value: Jsonish): string[] {
   }
 }
 
-
 function money(value: number | null | undefined) {
   if (value === null || value === undefined || !Number.isFinite(value)) return "--";
   return `$${value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -67,12 +66,14 @@ function money(value: number | null | undefined) {
 
 function signedMoney(value: number | null | undefined) {
   if (value === null || value === undefined || !Number.isFinite(value)) return "--";
-  return `${value > 0 ? "+" : ""}${money(value)}`;
+  const prefix = value > 0 ? "+" : "";
+  return `${prefix}${money(value)}`;
 }
 
 function signedPct(value: number | null | undefined) {
   if (value === null || value === undefined || !Number.isFinite(value)) return "--";
-  return `${value > 0 ? "+" : ""}${value.toFixed(2)}%`;
+  const prefix = value > 0 ? "+" : "";
+  return `${prefix}${value.toFixed(2)}%`;
 }
 
 function seconds(ms: number) {
@@ -149,7 +150,6 @@ async function safeSourceHealth() {
   }
 }
 
-
 async function safePaperAccount() {
   try {
     return await getPaperAccountSnapshot();
@@ -203,8 +203,7 @@ export default async function Home() {
   ]);
 
   const latestRun = pipelineRuns[0];
-  const pendingTrades = paperTrades.filter((trade) => trade.status === "pending_entry");
-  const openTrades = paperTrades.filter((trade) => trade.status === "open" || trade.status === "pending_exit");
+  const openTrades = paperTrades.filter((trade) => trade.status === "open");
   const closedTrades = paperTrades.filter((trade) => trade.status === "closed");
   const latestSignal = signals[0];
   const latestSignalEvent = signalEvents[0];
@@ -228,7 +227,7 @@ export default async function Home() {
         <nav className="nav" aria-label="Raven navigation">
           <a className="nav-item active" href="#overview">Overview <span className="nav-pill">live</span></a>
           <a className="nav-item" href="#paper-account">Account <span className="nav-pill">paper</span></a>
-          <a className="nav-item" href="#trades">Trades <span className="nav-pill">{openTrades.length + pendingTrades.length}</span></a>
+          <a className="nav-item" href="#trades">Trades <span className="nav-pill">{openTrades.length}</span></a>
           <a className="nav-item" href="#signals">Signals <span className="nav-pill">{signalEvents.length || signals.length}</span></a>
           <a className="nav-item" href="#radar">Radar <span className="nav-pill">{radarTickers.length}</span></a>
           <a className="nav-item" href="#decisions">Decisions <span className="nav-pill">{paperDecisions.length}</span></a>
@@ -265,9 +264,9 @@ export default async function Home() {
             <div className="kpi-note">{latestRun ? `${shortDate(latestRun.created_at)} · ${seconds(latestRun.duration_ms)}` : "No runs yet"}</div>
           </div>
           <div className="kpi">
-            <div className="kpi-label">Open trades</div>
-            <div className="kpi-value">{openTrades.length}</div>
-            <div className="kpi-note">{pendingTrades.length} pending · {closedTrades.length} closed</div>
+            <div className="kpi-label">Paper equity</div>
+            <div className="kpi-value">{paperSummary ? money(paperSummary.equity) : "--"}</div>
+            <div className="kpi-note">cash {paperSummary ? money(paperSummary.cash) : "--"}</div>
           </div>
           <div className="kpi">
             <div className="kpi-label">Latest decision</div>
@@ -281,53 +280,61 @@ export default async function Home() {
           </div>
         </div>
 
-
-        <section className="panel paper-account-panel" id="paper-account" style={{ marginTop: 14 }}>
-          <div className="panel-header">
-            <div>
-              <div className="panel-title">Paper account</div>
-              <div className="panel-meta">Alpaca paper · read-only · live trading disabled</div>
-            </div>
-            <a className={`badge ${paperAccount?.ok ? "green" : "amber"}`} href="/api/paper/report">Report</a>
-          </div>
-          <div className="run-summary run-summary-tight">
-            <div>
-              <span>Equity</span>
-              <strong>{money(paperSummary?.equity)}</strong>
-            </div>
-            <div>
-              <span>Cash</span>
-              <strong>{money(paperSummary?.cash)}</strong>
-            </div>
-            <div>
-              <span>Buying power</span>
-              <strong>{money(paperSummary?.buyingPower)}</strong>
-            </div>
-            <div>
-              <span>Today P/L</span>
-              <strong className={(paperSummary?.todayPl || 0) >= 0 ? "text-green" : "text-red"}>{signedMoney(paperSummary?.todayPl)} / {signedPct(paperSummary?.todayPlPercent)}</strong>
-            </div>
-            <div>
-              <span>Open positions</span>
-              <strong>{paperSummary?.openPositions ?? "--"}</strong>
-            </div>
-            <div>
-              <span>Open orders</span>
-              <strong>{paperSummary?.openOrders ?? "--"}</strong>
-            </div>
-          </div>
-          {paperAccount?.errors?.length ? <div className="empty-state">{paperAccount.errors[0]?.error}</div> : null}
-        </section>
-
         <div className="grid">
           <div className="left-stack">
+
+            <section className="panel paper-account-panel" id="paper-account">
+              <div className="panel-header">
+                <div>
+                  <div className="panel-title">Paper account</div>
+                  <div className="panel-meta">Alpaca paper · execution gated · live trading disabled</div>
+                </div>
+                <span className={`badge ${paperAccount?.ok ? "green" : "amber"}`}>{paperAccount?.ok ? "connected" : "check"}</span>
+              </div>
+              <div className="account-grid">
+                <div className="account-metric">
+                  <span>Equity</span>
+                  <strong>{paperSummary ? money(paperSummary.equity) : "--"}</strong>
+                </div>
+                <div className="account-metric">
+                  <span>Cash</span>
+                  <strong>{paperSummary ? money(paperSummary.cash) : "--"}</strong>
+                </div>
+                <div className="account-metric">
+                  <span>Buying power</span>
+                  <strong>{paperSummary ? money(paperSummary.buyingPower) : "--"}</strong>
+                </div>
+                <div className="account-metric">
+                  <span>Today P/L</span>
+                  <strong className={paperSummary && (paperSummary.todayPl || 0) < 0 ? "text-red" : "text-green"}>{paperSummary ? `${signedMoney(paperSummary.todayPl)} / ${signedPct(paperSummary.todayPlPercent)}` : "--"}</strong>
+                </div>
+                <div className="account-metric">
+                  <span>Open positions</span>
+                  <strong>{paperSummary?.openPositions ?? "--"}</strong>
+                </div>
+                <div className="account-metric">
+                  <span>Open orders</span>
+                  <strong>{paperSummary?.openOrders ?? "--"}</strong>
+                </div>
+              </div>
+              <div className="account-actions">
+                <a className="ghost-button" href="/api/paper/report">Readable report</a>
+                <a className="ghost-button" href="/api/paper/account">Account JSON</a>
+                <a className="ghost-button" href="/api/paper/positions">Positions</a>
+                <a className="ghost-button" href="/api/paper/orders">Orders</a>
+              </div>
+              {paperAccount?.errors?.length ? (
+                <div className="account-warning">{paperAccount.errors[0].error}</div>
+              ) : null}
+            </section>
+
             <section className="panel" id="trades">
               <div className="panel-header">
                 <div>
                   <div className="panel-title">Paper trades</div>
-                  <div className="panel-meta">Pending, open, and closed</div>
+                  <div className="panel-meta">pending_entry · open · closed · rejected</div>
                 </div>
-                <span className="badge green">{openTrades.length} open · {pendingTrades.length} pending</span>
+                <span className="badge green">{openTrades.length} active</span>
               </div>
               {paperTrades.length > 0 ? (
                 <div className="signal-list">
@@ -342,12 +349,11 @@ export default async function Home() {
                       </div>
                       <div className="market-strip">
                         <span>entry {trade.entry_price}</span>
-                        {trade.notional ? <span>size {money(trade.notional)}</span> : null}
-                        {trade.qty ? <span>qty {trade.qty}</span> : null}
+                        {trade.notional ? <span>notional {money(Number(trade.notional))}</span> : null}
+                        {trade.alpaca_order_status ? <span>order {trade.alpaca_order_status}</span> : null}
                         <span>stop {trade.stop_price}</span>
                         <span>target {trade.target_price}</span>
                         {trade.exit_price ? <span>exit {trade.exit_price}</span> : null}
-                        {trade.alpaca_order_id ? <span>order {trade.alpaca_order_id.slice(0, 8)}</span> : null}
                         {trade.pnl_percent ? <span>p/l {trade.pnl_percent}%</span> : null}
                       </div>
                       <p className="signal-copy">{trade.status === "closed" ? `${trade.outcome || "closed"}: ${trade.close_reason || "reviewed"}` : trade.decision_reason}</p>

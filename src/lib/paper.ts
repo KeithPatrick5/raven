@@ -1,4 +1,4 @@
-import { getAlpacaAccount, getAlpacaOrders, getAlpacaPositions, getLatestAlpacaSnapshot, hasAlpacaProvider, placePaperMarketBuyOrder } from "@/lib/alpaca";
+import { createAlpacaPaperOrder, getAlpacaAccount, getAlpacaOrders, getAlpacaPositions, getLatestAlpacaSnapshot, hasAlpacaProvider } from "@/lib/alpaca";
 import { db, ensureRavenTables, hasDatabase } from "@/lib/db";
 import { hasTelegramConfig, sendTelegramMessage } from "@/lib/telegram";
 
@@ -43,13 +43,14 @@ type PaperTrade = {
   close_reason?: string | null;
   outcome?: string | null;
   pnl_percent?: number | null;
+  lifecycle_status?: string | null;
   alpaca_order_id?: string | null;
-  client_order_id?: string | null;
+  alpaca_order_status?: string | null;
   notional?: number | null;
   qty?: number | null;
   submitted_at?: string | null;
   filled_at?: string | null;
-  max_hold_days?: number | null;
+  expires_at?: string | null;
 };
 
 type OpenTradeRow = PaperTrade & {
@@ -58,17 +59,94 @@ type OpenTradeRow = PaperTrade & {
   target_price: number;
 };
 
-type RiskProfile = {
-  enabled: boolean;
-  basePositionPercent: number;
-  maxPositionPercent: number;
-  maxOpenPositions: number;
-  maxDailyTrades: number;
-  maxDailyLossPercent: number;
-  maxHoldDays: number;
-  stopLossPercent: number;
-  takeProfitPercent: number;
-};
+
+function paperExecutionEnabled() {
+  return ["1", "true", "yes", "on"].includes((process.env.RAVEN_PAPER_EXECUTION_ENABLED || process.env.PAPER_TRADE_EXECUTION_ENABLED || "").toLowerCase());
+}
+
+const PAPER_MAX_OPEN_POSITIONS = Number(process.env.RAVEN_PAPER_MAX_OPEN_POSITIONS || "3");
+const PAPER_MAX_DAILY_TRADES = Number(process.env.RAVEN_PAPER_MAX_DAILY_TRADES || "3");
+const PAPER_POSITION_EQUITY_PERCENT = Number(process.env.RAVEN_PAPER_POSITION_EQUITY_PERCENT || "1");
+const PAPER_MAX_NOTIONAL = Number(process.env.RAVEN_PAPER_MAX_NOTIONAL || "2500");
+const PAPER_MIN_NOTIONAL = Number(process.env.RAVEN_PAPER_MIN_NOTIONAL || "25");
+
+function orderStatusToLifecycle(status: string | null | undefined) {
+  const normalized = (status || "").toLowerCase();
+  if (["filled", "partially_filled"].includes(normalized)) return "open";
+  if (["new", "accepted", "pending_new", "accepted_for_bidding", "calculated"].includes(normalized)) return "pending_entry";
+  if (["canceled", "expired", "rejected", "stopped", "suspended"].includes(normalized)) return normalized === "rejected" ? "rejected" : "expired";
+  return "pending_entry";
+}
+
+function toMoney(value: unknown) {
+  const parsed = asNumber(value);
+  return parsed === null ? null : roundMoney(parsed);
+}
+
+async function dailyPaperTradeCount() {
+  const sql = db();
+  const rows = await sql<Array<{ count: number | string }>>`
+    select count(*)::int as count
+    from paper_trades
+    where opened_at >= date_trunc('day', now())
+      and status in ('pending_entry', 'open', 'pending_exit', 'closed')
+  `;
+  return Number(rows[0]?.count || 0);
+}
+
+async function activePaperTradeCount() {
+  const sql = db();
+  const rows = await sql<Array<{ count: number | string }>>`
+    select count(*)::int as count
+    from paper_trades
+    where status in ('pending_entry', 'open', 'pending_exit')
+  `;
+  return Number(rows[0]?.count || 0);
+}
+
+async function accountRiskCheck(row: CandidateRow) {
+  if (!hasAlpacaProvider()) {
+    return { ok: false, reject: "alpaca_not_configured", notional: null as number | null, notes: ["Alpaca credentials are missing."] };
+  }
+
+  const [account, positions, openOrders, dailyCount, activeCount] = await Promise.all([
+    getAlpacaAccount("paper"),
+    getAlpacaPositions("paper"),
+    getAlpacaOrders("paper", "open", 50),
+    dailyPaperTradeCount(),
+    activePaperTradeCount()
+  ]);
+
+  const equity = toMoney(account.equity);
+  const buyingPower = toMoney(account.buying_power);
+  const cash = toMoney(account.cash);
+  const alreadyHeld = positions.some((position) => position.symbol.toUpperCase() === row.ticker.toUpperCase());
+  const alreadyOrdered = openOrders.some((order) => order.symbol.toUpperCase() === row.ticker.toUpperCase());
+  const maxOpen = Number.isFinite(PAPER_MAX_OPEN_POSITIONS) ? PAPER_MAX_OPEN_POSITIONS : 3;
+  const maxDaily = Number.isFinite(PAPER_MAX_DAILY_TRADES) ? PAPER_MAX_DAILY_TRADES : 3;
+  const percent = Number.isFinite(PAPER_POSITION_EQUITY_PERCENT) ? PAPER_POSITION_EQUITY_PERCENT : 1;
+  const cap = Number.isFinite(PAPER_MAX_NOTIONAL) ? PAPER_MAX_NOTIONAL : 2500;
+  const min = Number.isFinite(PAPER_MIN_NOTIONAL) ? PAPER_MIN_NOTIONAL : 25;
+  const base = equity === null ? null : roundMoney(equity * (percent / 100));
+  const notional = base === null ? null : Math.max(min, Math.min(base, cap));
+  const notes = [
+    `Equity ${equity ?? "unknown"}.`,
+    `Buying power ${buyingPower ?? "unknown"}.`,
+    `Paper order size ${notional ?? "unknown"}.`,
+    `Active paper trades ${activeCount}/${maxOpen}.`,
+    `Daily paper trades ${dailyCount}/${maxDaily}.`
+  ];
+
+  if (equity === null || buyingPower === null || notional === null) return { ok: false, reject: "account_values_unavailable", notional, notes };
+  if (notional > buyingPower) return { ok: false, reject: "insufficient_buying_power", notional, notes };
+  if (activeCount >= maxOpen) return { ok: false, reject: "max_open_positions_reached", notional, notes };
+  if (dailyCount >= maxDaily) return { ok: false, reject: "max_daily_trades_reached", notional, notes };
+  if (alreadyHeld) return { ok: false, reject: "position_already_open_in_alpaca", notional, notes };
+  if (alreadyOrdered) return { ok: false, reject: "open_order_already_exists_in_alpaca", notional, notes };
+  if (cash !== null && notional > cash && buyingPower <= cash) return { ok: false, reject: "cash_limit_reached", notional, notes };
+
+  return { ok: true, reject: null, notional, notes };
+}
 
 function asNumber(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) return value;
@@ -85,32 +163,8 @@ function roundMoney(value: number) {
   return round(value, 2);
 }
 
-function boolEnv(name: string, fallback = false) {
-  const value = process.env[name];
-  if (value === undefined) return fallback;
-  return ["1", "true", "yes", "on"].includes(value.toLowerCase());
-}
-
-function numberEnv(name: string, fallback: number) {
-  const value = Number(process.env[name]);
-  return Number.isFinite(value) ? value : fallback;
-}
-
-function riskProfile(): RiskProfile {
-  return {
-    enabled: boolEnv("RAVEN_PAPER_EXECUTION_ENABLED", false),
-    basePositionPercent: Math.max(0.1, Math.min(5, numberEnv("RAVEN_PAPER_POSITION_PCT", 1))),
-    maxPositionPercent: Math.max(0.1, Math.min(10, numberEnv("RAVEN_PAPER_MAX_POSITION_PCT", 2.5))),
-    maxOpenPositions: Math.max(1, Math.min(10, Math.floor(numberEnv("RAVEN_PAPER_MAX_OPEN_POSITIONS", 3)))),
-    maxDailyTrades: Math.max(1, Math.min(10, Math.floor(numberEnv("RAVEN_PAPER_MAX_DAILY_TRADES", 3)))),
-    maxDailyLossPercent: Math.max(0.5, Math.min(10, numberEnv("RAVEN_PAPER_MAX_DAILY_LOSS_PCT", 3))),
-    maxHoldDays: Math.max(1, Math.min(20, Math.floor(numberEnv("RAVEN_PAPER_MAX_HOLD_DAYS", 5)))),
-    stopLossPercent: Math.max(1, Math.min(20, numberEnv("RAVEN_PAPER_STOP_LOSS_PCT", 4))),
-    takeProfitPercent: Math.max(1, Math.min(50, numberEnv("RAVEN_PAPER_TAKE_PROFIT_PCT", 8)))
-  };
-}
-
 function tradeSide(row: CandidateRow): "long" | null {
+  // Raven v1 is long-only. Bearish signals can protect us from traps later, but they do not open shorts yet.
   return row.direction.toLowerCase() === "bullish" ? "long" : null;
 }
 
@@ -118,31 +172,25 @@ function entryPrice(row: CandidateRow): number | null {
   return asNumber(row.latest_close);
 }
 
-function planFor(row: CandidateRow, profile = riskProfile(), equity: number | null = null) {
+function planFor(row: CandidateRow) {
   const entry = entryPrice(row);
   const side = tradeSide(row);
-  const accountEquity = equity && equity > 0 ? equity : 0;
-  const baseNotional = accountEquity ? accountEquity * (profile.basePositionPercent / 100) : 0;
-  const maxNotional = accountEquity ? accountEquity * (profile.maxPositionPercent / 100) : 0;
-  const notional = accountEquity ? roundMoney(Math.min(baseNotional, maxNotional)) : null;
 
   if (!entry || !side) {
-    return { side, entry, stop: null, target: null, notional, qty: null };
+    return { side, entry, stop: null, target: null };
   }
 
   return {
     side,
     entry: roundMoney(entry),
-    stop: roundMoney(entry * (1 - profile.stopLossPercent / 100)),
-    target: roundMoney(entry * (1 + profile.takeProfitPercent / 100)),
-    notional,
-    qty: notional ? round(notional / entry, 6) : null
+    stop: roundMoney(entry * 0.96),
+    target: roundMoney(entry * 1.08)
   };
 }
 
-function decision(row: CandidateRow, riskRejects: string[] = []) {
+function decision(row: CandidateRow) {
   const reasons: string[] = [];
-  const rejects: string[] = [...riskRejects];
+  const rejects: string[] = [];
   const confirmation = row.market_confirmation.toLowerCase();
   const liquidity = (row.liquidity_status || "").toLowerCase();
   const side = tradeSide(row);
@@ -154,15 +202,17 @@ function decision(row: CandidateRow, riskRejects: string[] = []) {
   if (row.liquidity_status) reasons.push(`Liquidity ${row.liquidity_status}.`);
 
   if (row.final_score < 70) rejects.push("score_below_70");
-  if (row.action !== "paper_trade_candidate") rejects.push("action_not_trade_eligible");
-  if (confirmation !== "confirmed") rejects.push("market_not_confirming");
+  if (!["paper_trade_candidate", "high_watch"].includes(row.action)) rejects.push("action_not_trade_eligible");
+  if (!["confirmed", "watch"].includes(confirmation)) rejects.push("market_not_confirming");
   if (!["liquid", "active"].includes(liquidity)) rejects.push("liquidity_not_strong_enough");
   if (!side) rejects.push("long_only_engine_rejects_bearish_or_neutral_signal");
   if (!entry) rejects.push("missing_entry_price");
+  if (row.action === "dilution_watch" || row.action === "shelf_watch") rejects.push("dilution_watch_not_long_trade");
+  if ((row.risk_flags || []).some((flag) => String(flag).toLowerCase().includes("dilution") || String(flag).toLowerCase().includes("offering"))) rejects.push("dilution_or_offering_risk");
 
   return {
     shouldOpen: rejects.length === 0,
-    decision: rejects.length === 0 ? "pending_entry" : "reject",
+    decision: rejects.length === 0 ? "open_paper_trade" : "reject",
     reasons,
     rejects
   };
@@ -202,75 +252,6 @@ async function getOpenCandidates(limit: number): Promise<CandidateRow[]> {
     order by s.final_score desc, s.created_at desc
     limit ${limit}
   `;
-}
-
-async function todaysTradeCount() {
-  const sql = db();
-  const rows = await sql<{ count: string }[]>`
-    select count(*)::text as count
-    from paper_trades
-    where opened_at >= date_trunc('day', now())
-      and status in ('pending_entry', 'open', 'pending_exit', 'closed')
-  `;
-  return Number(rows[0]?.count || 0);
-}
-
-async function currentOpenPositionCount() {
-  const sql = db();
-  const rows = await sql<{ count: string }[]>`
-    select count(*)::text as count
-    from paper_trades
-    where status in ('pending_entry', 'open', 'pending_exit')
-  `;
-  return Number(rows[0]?.count || 0);
-}
-
-async function existingTradeForTicker(ticker: string) {
-  const sql = db();
-  const rows = await sql<{ count: string }[]>`
-    select count(*)::text as count
-    from paper_trades
-    where ticker = ${ticker}
-      and status in ('pending_entry', 'open', 'pending_exit')
-  `;
-  return Number(rows[0]?.count || 0) > 0;
-}
-
-async function accountRiskRejects(row: CandidateRow, profile: RiskProfile) {
-  const rejects: string[] = [];
-
-  if (!hasAlpacaProvider()) {
-    rejects.push("alpaca_not_configured");
-    return { rejects, accountEquity: null, buyingPower: null };
-  }
-
-  const [account, positions, openOrders, openCount, dailyCount, duplicateTicker] = await Promise.all([
-    getAlpacaAccount("paper"),
-    getAlpacaPositions("paper"),
-    getAlpacaOrders("paper", "open", 50),
-    currentOpenPositionCount(),
-    todaysTradeCount(),
-    existingTradeForTicker(row.ticker)
-  ]);
-
-  const equity = asNumber(account.equity);
-  const buyingPower = asNumber(account.buying_power);
-  const lastEquity = asNumber(account.last_equity);
-  const todayPl = equity !== null && lastEquity !== null ? equity - lastEquity : null;
-  const todayLossPct = todayPl !== null && lastEquity && todayPl < 0 ? Math.abs(todayPl / lastEquity) * 100 : 0;
-  const totalOpenExposure = Math.max(openCount, positions.length) + openOrders.length;
-
-  if (equity === null || equity <= 0) rejects.push("missing_account_equity");
-  if (buyingPower === null || buyingPower <= 0) rejects.push("missing_buying_power");
-  if (totalOpenExposure >= profile.maxOpenPositions) rejects.push("max_open_positions_reached");
-  if (dailyCount >= profile.maxDailyTrades) rejects.push("max_daily_trades_reached");
-  if (todayLossPct >= profile.maxDailyLossPercent) rejects.push("max_daily_loss_reached");
-  if (duplicateTicker) rejects.push("ticker_already_active");
-
-  const plan = planFor(row, profile, equity);
-  if (plan.notional !== null && buyingPower !== null && plan.notional > buyingPower) rejects.push("insufficient_buying_power");
-
-  return { rejects, accountEquity: equity, buyingPower };
 }
 
 async function logDecision(row: CandidateRow, verdict: ReturnType<typeof decision>) {
@@ -327,16 +308,41 @@ async function logDecision(row: CandidateRow, verdict: ReturnType<typeof decisio
   `;
 }
 
-function clientOrderId(row: CandidateRow) {
-  return `raven-paper-${row.scored_signal_id}-${Date.now()}`.slice(0, 48);
-}
-
-async function createPendingTrade(row: CandidateRow, reason: string, profile: RiskProfile, equity: number | null, status = "pending_entry", alpacaOrder?: { id?: string; client_order_id?: string; notional?: string | null; qty?: string | null; submitted_at?: string; filled_at?: string | null; status?: string }) {
+async function openTrade(row: CandidateRow) {
   const sql = db();
-  const plan = planFor(row, profile, equity);
+  const plan = planFor(row);
+  const verdict = decision(row);
+  const executionEnabled = paperExecutionEnabled();
+  const risk = executionEnabled ? await accountRiskCheck(row) : { ok: false, reject: "paper_execution_disabled", notional: null as number | null, notes: ["Set RAVEN_PAPER_EXECUTION_ENABLED=true to allow Alpaca paper orders."] };
+  const reason = [...verdict.reasons, ...risk.notes, "Live trading remains disabled."].join(" ");
 
   if (!plan.side || plan.entry === null || plan.stop === null || plan.target === null) {
     throw new Error("Trade plan was incomplete after eligibility passed.");
+  }
+
+  let status = "pending_entry";
+  let alpacaOrderId: string | null = null;
+  let alpacaOrderStatus: string | null = null;
+  let notional = risk.notional;
+  let qty: number | null = null;
+  let rawOrder: Record<string, unknown> | null = null;
+
+  if (!executionEnabled || !risk.ok || notional === null) {
+    status = "rejected";
+  } else {
+    const order = await createAlpacaPaperOrder({
+      symbol: row.ticker,
+      side: "buy",
+      type: "market",
+      time_in_force: "day",
+      notional: notional.toFixed(2),
+      client_order_id: `raven-paper-${row.scored_signal_id}-${Date.now()}`
+    });
+    alpacaOrderId = order.id;
+    alpacaOrderStatus = order.status;
+    status = orderStatusToLifecycle(order.status);
+    qty = asNumber(order.filled_qty) || null;
+    rawOrder = order as unknown as Record<string, unknown>;
   }
 
   const inserted = await sql<PaperTrade[]>`
@@ -347,19 +353,20 @@ async function createPendingTrade(row: CandidateRow, reason: string, profile: Ri
       ticker,
       side,
       status,
+      lifecycle_status,
+      alpaca_order_id,
+      alpaca_order_status,
+      notional,
+      qty,
       entry_price,
       stop_price,
       target_price,
       final_score,
       decision_reason,
-      raw_payload,
-      alpaca_order_id,
-      client_order_id,
-      notional,
-      qty,
       submitted_at,
       filled_at,
-      max_hold_days
+      expires_at,
+      raw_payload
     ) values (
       ${row.scored_signal_id},
       ${row.confirmation_id},
@@ -367,12 +374,22 @@ async function createPendingTrade(row: CandidateRow, reason: string, profile: Ri
       ${row.ticker},
       ${plan.side},
       ${status},
+      ${status},
+      ${alpacaOrderId},
+      ${alpacaOrderStatus},
+      ${notional},
+      ${qty},
       ${plan.entry},
       ${plan.stop},
       ${plan.target},
       ${row.final_score},
-      ${reason},
+      ${risk.ok ? reason : `${reason} Rejected: ${risk.reject}.`},
+      ${alpacaOrderId ? new Date().toISOString() : null},
+      ${alpacaOrderStatus === "filled" ? new Date().toISOString() : null},
+      ${new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()},
       ${JSON.stringify({
+        execution: { enabled: executionEnabled, risk },
+        alpacaOrder: rawOrder,
         signal: {
           form: row.form,
           direction: row.direction,
@@ -390,16 +407,8 @@ async function createPendingTrade(row: CandidateRow, reason: string, profile: Ri
           relativeVolume: row.relative_volume,
           liquidityStatus: row.liquidity_status,
           priceStatus: row.price_status
-        },
-        risk: profile
-      })}::jsonb,
-      ${alpacaOrder?.id || null},
-      ${alpacaOrder?.client_order_id || null},
-      ${plan.notional},
-      ${asNumber(alpacaOrder?.qty) || plan.qty},
-      ${alpacaOrder?.submitted_at || null},
-      ${alpacaOrder?.filled_at || null},
-      ${profile.maxHoldDays}
+        }
+      })}::jsonb
     )
     on conflict (scored_signal_id) do nothing
     returning
@@ -409,19 +418,20 @@ async function createPendingTrade(row: CandidateRow, reason: string, profile: Ri
       accession_number,
       side,
       status,
+      lifecycle_status,
+      alpaca_order_id,
+      alpaca_order_status,
+      notional,
+      qty,
       entry_price,
       stop_price,
       target_price,
       final_score,
       decision_reason,
       opened_at::text as opened_at,
-      alpaca_order_id,
-      client_order_id,
-      notional,
-      qty,
       submitted_at::text as submitted_at,
       filled_at::text as filled_at,
-      max_hold_days
+      expires_at::text as expires_at
   `;
 
   return inserted[0] || null;
@@ -429,19 +439,16 @@ async function createPendingTrade(row: CandidateRow, reason: string, profile: Ri
 
 function formatPaperTradeAlert(trade: PaperTrade) {
   return [
-    trade.status === "open" ? "RAVEN PAPER ORDER SENT" : "RAVEN PAPER ENTRY QUEUED",
+    "RAVEN PAPER TRADE OPENED",
     "Live trading: disabled",
     "",
     `${trade.ticker} | ${trade.side.toUpperCase()} | score ${trade.final_score}/100`,
-    `Status: ${trade.status}`,
-    `Notional: ${trade.notional ?? "pending"}`,
-    `Entry ref: ${trade.entry_price}`,
+    `Entry: ${trade.entry_price}`,
     `Stop: ${trade.stop_price}`,
     `Target: ${trade.target_price}`,
-    trade.alpaca_order_id ? `Alpaca order: ${trade.alpaca_order_id}` : null,
     "",
     `Reason: ${trade.decision_reason}`
-  ].filter(Boolean).join("\n");
+  ].join("\n");
 }
 
 function formatPaperTradeCloseAlert(trade: PaperTrade) {
@@ -477,41 +484,23 @@ export async function runPaperTradeEngine(limit = 10) {
     return {
       ok: false,
       database: "not_configured" as const,
-      paperExecution: "disabled" as const,
       evaluated: 0,
       opened: 0,
-      pending: 0,
       rejected: 0,
       trades: [],
-      pendingEntries: [],
       rejects: [],
       errors: [{ error: "DATABASE_URL or STORAGE_URL is not configured." }]
     };
   }
 
   await ensureRavenTables();
-  const profile = riskProfile();
   const rows = await getOpenCandidates(limit);
   const trades: Array<Record<string, unknown>> = [];
-  const pendingEntries: Array<Record<string, unknown>> = [];
   const rejects: Array<Record<string, unknown>> = [];
   const errors: Array<Record<string, unknown>> = [];
 
   for (const row of rows) {
-    let risk = { rejects: [] as string[], accountEquity: null as number | null, buyingPower: null as number | null };
-
-    if (hasAlpacaProvider()) {
-      try {
-        risk = await accountRiskRejects(row, profile);
-      } catch (error) {
-        risk.rejects.push("account_risk_check_failed");
-        errors.push({ ticker: row.ticker, accessionNumber: row.accession_number, error: error instanceof Error ? error.message : "Unknown account risk check failure" });
-      }
-    } else {
-      risk.rejects.push("alpaca_not_configured");
-    }
-
-    const verdict = decision(row, risk.rejects);
+    const verdict = decision(row);
     await logDecision(row, verdict);
 
     if (!verdict.shouldOpen) {
@@ -526,33 +515,42 @@ export async function runPaperTradeEngine(limit = 10) {
       continue;
     }
 
-    const reason = [
-      ...verdict.reasons,
-      `Risk limits passed. Max open ${profile.maxOpenPositions}. Max daily ${profile.maxDailyTrades}. Position ${profile.basePositionPercent}% of paper equity.`,
-      profile.enabled ? "Raven submitted this as an Alpaca PAPER market buy. Live trading remains disabled." : "Paper execution is disabled, so Raven queued this as pending_entry only."
-    ].join(" ");
-
     try {
-      if (!profile.enabled) {
-        const trade = await createPendingTrade(row, reason, profile, risk.accountEquity, "pending_entry");
-        if (trade) {
-          pendingEntries.push({ ticker: trade.ticker, accessionNumber: trade.accession_number, side: trade.side, status: trade.status, notional: trade.notional, entry: trade.entry_price, stop: trade.stop_price, target: trade.target_price, score: trade.final_score });
-        }
-        continue;
-      }
-
-      const plan = planFor(row, profile, risk.accountEquity);
-      if (!plan.notional || plan.notional <= 0) throw new Error("Missing paper order notional after account risk check.");
-      const clientId = clientOrderId(row);
-      const order = await placePaperMarketBuyOrder({ symbol: row.ticker, notional: plan.notional, clientOrderId: clientId });
-      const status = ["filled", "partially_filled"].includes(order.status) ? "open" : "pending_entry";
-      const trade = await createPendingTrade(row, reason, profile, risk.accountEquity, status, { ...order, client_order_id: clientId });
+      const trade = await openTrade(row);
       if (trade) {
-        const telegram = await sendTradeAlertIfConfigured(trade);
-        trades.push({ ticker: trade.ticker, accessionNumber: trade.accession_number, side: trade.side, status: trade.status, notional: trade.notional, orderStatus: order.status, alpacaOrderId: order.id, score: trade.final_score, telegram });
+        if (trade.status === "rejected") {
+          rejects.push({
+            ticker: trade.ticker,
+            accessionNumber: trade.accession_number,
+            score: trade.final_score,
+            action: row.action,
+            rejects: ["paper_order_risk_check_failed"],
+            reasons: [trade.decision_reason]
+          });
+        } else {
+          const telegram = await sendTradeAlertIfConfigured(trade);
+          trades.push({
+            ticker: trade.ticker,
+            accessionNumber: trade.accession_number,
+            side: trade.side,
+            status: trade.status,
+            entry: trade.entry_price,
+            stop: trade.stop_price,
+            target: trade.target_price,
+            notional: trade.notional,
+            alpacaOrderId: trade.alpaca_order_id,
+            alpacaOrderStatus: trade.alpaca_order_status,
+            score: trade.final_score,
+            telegram
+          });
+        }
       }
     } catch (error) {
-      errors.push({ ticker: row.ticker, accessionNumber: row.accession_number, error: error instanceof Error ? error.message : "Unknown paper-trade failure" });
+      errors.push({
+        ticker: row.ticker,
+        accessionNumber: row.accession_number,
+        error: error instanceof Error ? error.message : "Unknown paper-trade failure"
+      });
     }
   }
 
@@ -562,14 +560,11 @@ export async function runPaperTradeEngine(limit = 10) {
   return {
     ok: errors.length === 0,
     database: "configured" as const,
-    paperExecution: profile.enabled ? "enabled" as const : "disabled" as const,
     evaluated: rows.length,
-    opened: trades.filter((trade) => trade.status === "open").length,
-    pending: pendingEntries.length + trades.filter((trade) => trade.status === "pending_entry").length,
+    opened: trades.length,
     rejected: rejects.length,
     alreadyLogged: recentDecisions.length,
     trades,
-    pendingEntries,
     rejects,
     recentDecisions,
     recentTrades,
@@ -598,15 +593,16 @@ async function getOpenTrades(limit: number): Promise<OpenTradeRow[]> {
       close_reason,
       outcome,
       pnl_percent,
+      lifecycle_status,
       alpaca_order_id,
-      client_order_id,
+      alpaca_order_status,
       notional,
       qty,
       submitted_at::text as submitted_at,
       filled_at::text as filled_at,
-      max_hold_days
+      expires_at::text as expires_at
     from paper_trades
-    where status in ('open', 'pending_exit')
+    where status in ('pending_entry', 'open')
     order by opened_at asc
     limit ${limit}
   `;
@@ -620,13 +616,14 @@ async function closeTrade(trade: OpenTradeRow, exitPrice: number, closeReason: s
     update paper_trades
     set
       status = 'closed',
+      lifecycle_status = 'closed',
       exit_price = ${roundMoney(exitPrice)},
       closed_at = now(),
       close_reason = ${closeReason},
       outcome = ${outcome},
       pnl_percent = ${round(pnl, 2)}
     where id = ${trade.id}
-      and status in ('open', 'pending_exit')
+      and status in ('pending_entry', 'open', 'pending_exit')
     returning
       id,
       scored_signal_id,
@@ -644,31 +641,16 @@ async function closeTrade(trade: OpenTradeRow, exitPrice: number, closeReason: s
       closed_at::text as closed_at,
       close_reason,
       outcome,
-      pnl_percent,
-      alpaca_order_id,
-      client_order_id,
-      notional,
-      qty,
-      submitted_at::text as submitted_at,
-      filled_at::text as filled_at,
-      max_hold_days
+      pnl_percent
   `;
 
   return updated[0] || null;
-}
-
-function daysOpen(openedAt: string) {
-  const opened = new Date(openedAt).getTime();
-  if (!Number.isFinite(opened)) return 0;
-  return (Date.now() - opened) / 86_400_000;
 }
 
 function closeDecision(trade: OpenTradeRow, latestClose: number | null) {
   if (latestClose === null) {
     return { shouldClose: false, reason: "no_latest_price", outcome: "open" };
   }
-
-  if (trade.max_hold_days && daysOpen(trade.opened_at) >= trade.max_hold_days) return { shouldClose: true, reason: "max_hold_hit", outcome: "time_exit" };
 
   if (trade.side === "long") {
     if (latestClose <= trade.stop_price) return { shouldClose: true, reason: "stop_hit", outcome: "loss" };
@@ -723,13 +705,32 @@ export async function reviewOpenPaperTrades(limit = 10) {
         const closed = await closeTrade(trade, snapshot.latestClose, verdict.reason, verdict.outcome);
         if (closed) {
           const telegram = await sendTradeAlertIfConfigured(closed, "closed");
-          closes.push({ ticker: closed.ticker, side: closed.side, exit: closed.exit_price, outcome: closed.outcome, pnlPercent: closed.pnl_percent, reason: closed.close_reason, telegram });
+          closes.push({
+            ticker: closed.ticker,
+            side: closed.side,
+            exit: closed.exit_price,
+            outcome: closed.outcome,
+            pnlPercent: closed.pnl_percent,
+            reason: closed.close_reason,
+            telegram
+          });
         }
       } else {
-        open.push({ ticker: trade.ticker, side: trade.side, entry: trade.entry_price, latestClose: snapshot.latestClose, stop: trade.stop_price, target: trade.target_price, notional: trade.notional, qty: trade.qty, maxHoldDays: trade.max_hold_days, status: verdict.reason });
+        open.push({
+          ticker: trade.ticker,
+          side: trade.side,
+          entry: trade.entry_price,
+          latestClose: snapshot.latestClose,
+          stop: trade.stop_price,
+          target: trade.target_price,
+          status: verdict.reason
+        });
       }
     } catch (error) {
-      errors.push({ ticker: trade.ticker, error: error instanceof Error ? error.message : "Unknown paper-trade review failure" });
+      errors.push({
+        ticker: trade.ticker,
+        error: error instanceof Error ? error.message : "Unknown paper-trade review failure"
+      });
     }
   }
 
@@ -773,13 +774,14 @@ export async function getLatestPaperTrades(limit = 10) {
     close_reason: string | null;
     outcome: string | null;
     pnl_percent: number | null;
+    lifecycle_status: string | null;
     alpaca_order_id: string | null;
-    client_order_id: string | null;
+    alpaca_order_status: string | null;
     notional: number | null;
     qty: number | null;
     submitted_at: string | null;
     filled_at: string | null;
-    max_hold_days: number | null;
+    expires_at: string | null;
   }>>`
     select
       ticker,
@@ -797,13 +799,14 @@ export async function getLatestPaperTrades(limit = 10) {
       close_reason,
       outcome,
       pnl_percent,
+      lifecycle_status,
       alpaca_order_id,
-      client_order_id,
+      alpaca_order_status,
       notional,
       qty,
       submitted_at::text as submitted_at,
       filled_at::text as filled_at,
-      max_hold_days
+      expires_at::text as expires_at
     from paper_trades
     order by opened_at desc
     limit ${limit}
