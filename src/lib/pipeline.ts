@@ -6,6 +6,7 @@ import { scorePendingSignals } from "@/lib/scoring";
 import { scanWatchlistSecFilings } from "@/lib/sec";
 import { savePipelineRun } from "@/lib/pipelineRuns";
 import { scanFinraShortVolume } from "@/lib/finra";
+import { scanFederalRegisterSignals } from "@/lib/federalRegister";
 
 type PipelineStep = {
   name: string;
@@ -124,6 +125,7 @@ export async function runRavenPipeline() {
   steps.push(await runStep("ai_classify_one", () => classifyPendingSecFilings(1)));
   steps.push(await runStep("alpaca_confirm", () => confirmPendingSecSignalsWithAlpaca(5)));
   steps.push(await runStep("finra_short_volume", scanFinraShortVolume));
+  steps.push(await runStep("federal_register", scanFederalRegisterSignals));
   steps.push(await runStep("score_signals", () => scorePendingSignals(10)));
   steps.push(await runStep("paper_trade_engine", () => runPaperTradeEngine(10)));
   steps.push(await runStep("paper_trade_review", () => reviewOpenPaperTrades(10)));

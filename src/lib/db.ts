@@ -210,6 +210,39 @@ export async function ensureRavenTables() {
     on raw_finra_short_volume (symbol, trade_date desc)
   `;
 
+
+
+  await sql`
+    create table if not exists raw_federal_register_docs (
+      id bigserial primary key,
+      document_number text not null,
+      ticker text not null,
+      matched_term text not null,
+      category text not null,
+      document_type text,
+      publication_date date,
+      title text not null,
+      summary text not null,
+      source_url text,
+      agencies jsonb not null default '[]'::jsonb,
+      raw_payload jsonb not null default '{}'::jsonb,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now(),
+      unique(document_number, ticker, matched_term)
+    )
+  `;
+
+  await sql`
+    create index if not exists raw_federal_register_docs_ticker_date_idx
+    on raw_federal_register_docs (ticker, publication_date desc)
+  `;
+
+  await sql`
+    create index if not exists raw_federal_register_docs_category_date_idx
+    on raw_federal_register_docs (category, publication_date desc)
+  `;
+
+
   await sql`
     create table if not exists telegram_alerts (
       id bigserial primary key,
