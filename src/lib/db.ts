@@ -362,6 +362,31 @@ export async function ensureRavenTables() {
 
 
   await sql`
+    create table if not exists raw_news_articles (
+      id bigserial primary key,
+      provider text not null,
+      article_id text not null,
+      ticker text not null,
+      headline text not null,
+      summary text not null,
+      source text,
+      url text,
+      published_at timestamptz,
+      symbols jsonb not null default '[]'::jsonb,
+      raw_payload jsonb not null default '{}'::jsonb,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now(),
+      unique(provider, article_id)
+    )
+  `;
+
+  await sql`
+    create index if not exists raw_news_articles_ticker_published_idx
+    on raw_news_articles (ticker, published_at desc)
+  `;
+
+
+  await sql`
     create table if not exists telegram_alerts (
       id bigserial primary key,
       scored_signal_id bigint references scored_signals(id) on delete cascade,
