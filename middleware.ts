@@ -14,7 +14,7 @@ function isPublicPath(pathname: string): boolean {
 function hasValidCronSecret(request: NextRequest): boolean {
   const cronSecret = process.env.RAVEN_CRON_SECRET?.trim();
 
-  if (!cronSecret || !request.nextUrl.pathname.startsWith("/api/scan")) {
+  if (!cronSecret || !(request.nextUrl.pathname.startsWith("/api/scan") || request.nextUrl.pathname.startsWith("/api/run"))) {
     return false;
   }
 

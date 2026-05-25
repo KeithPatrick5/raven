@@ -12,17 +12,18 @@ const phases = [
   ["Signal scoring", "Store scored events and readable verdicts in Postgres."],
   ["Telegram test route", "Bot status messages only. Signal spam disabled."],
   ["Paper trade engine", "Deterministic paper-trade decisions."],
-  ["Paper trade lifecycle", "Current build. Track opens, rejects, stops, targets."],
+  ["Paper trade lifecycle", "Track opens, rejects, stops, targets."],
+  ["Pipeline runner", "Current build. One endpoint runs the Raven sequence."],
   ["Dashboard cleanup", "Keep only important Raven outputs."]
 ];
 
 const systemSignals = [
   {
-    title: "Phase 7C decision log wired",
+    title: "Phase 8 pipeline runner wired",
     source: "RAVEN_SYSTEM",
     score: 55,
     tone: "blue",
-    copy: "Paper engine now exposes recent rejects and trade decisions so empty runs still show what Raven already decided."
+    copy: "One route now runs SEC scan, AI classify, Alpaca confirm, scoring, paper trade engine, and trade review in order."
   },
   {
     title: "SEC + AI storage online",
@@ -103,7 +104,7 @@ export default async function Home() {
       <section className="main">
         <div className="topbar" id="overview">
           <div>
-            <div className="eyebrow">Phase 7C / Paper decision log</div>
+            <div className="eyebrow">Phase 8 / Pipeline runner</div>
             <h1>Private Raven signal board</h1>
           </div>
           <div className="top-actions">
@@ -112,6 +113,7 @@ export default async function Home() {
             <span className="badge blue">AI route wired</span>
             <span className="badge green">Scoring route wired</span>
             <span className="badge green">Paper engine wired</span>
+            <span className="badge green">Pipeline wired</span>
             <form action="/api/logout" method="post">
               <button className="ghost-button" type="submit">Lock</button>
             </form>
@@ -126,8 +128,8 @@ export default async function Home() {
           </div>
           <div className="kpi">
             <div className="kpi-label">Signal engine</div>
-            <div className="kpi-value">90%</div>
-            <div className="kpi-note">Decision log added</div>
+            <div className="kpi-value">95%</div>
+            <div className="kpi-note">Pipeline runner added</div>
           </div>
           <div className="kpi">
             <div className="kpi-label">Paper trades</div>
@@ -190,6 +192,7 @@ export default async function Home() {
                   <a className="badge green" href="/api/score/signals">score</a>
                   <a className="badge green" href="/api/paper/trades">paper</a>
                   <a className="badge blue" href="/api/paper/trades/review">review</a>
+                  <a className="badge green" href="/api/run/pipeline">run pipeline</a>
                 </div>
               </div>
 
@@ -355,6 +358,7 @@ export default async function Home() {
                 TELEGRAM_TEST: /api/alert/telegram?mode=test<br />
                 PAPER_ENGINE: /api/paper/trades<br />
                 PAPER_REVIEW: /api/paper/trades/review<br />
+                RAVEN_PIPELINE: /api/run/pipeline<br />
                 LIVE_EXECUTION: disabled
               </div>
             </section>
