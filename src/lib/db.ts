@@ -232,4 +232,34 @@ export async function ensureRavenTables() {
     on paper_trades (ticker, opened_at desc)
   `;
 
+
+  await sql`
+    create table if not exists pipeline_runs (
+      id bigserial primary key,
+      status text not null,
+      started_at timestamptz not null,
+      finished_at timestamptz not null,
+      duration_ms integer not null default 0,
+      steps_total integer not null default 0,
+      steps_failed integer not null default 0,
+      sec_filings_found integer not null default 0,
+      sec_filings_saved integer not null default 0,
+      ai_classified integer not null default 0,
+      alpaca_confirmed integer not null default 0,
+      signals_scored integer not null default 0,
+      paper_trades_opened integer not null default 0,
+      paper_trades_closed integer not null default 0,
+      paper_trades_rejected integer not null default 0,
+      summary jsonb not null default '{}'::jsonb,
+      steps jsonb not null default '[]'::jsonb,
+      errors jsonb not null default '[]'::jsonb,
+      created_at timestamptz not null default now()
+    )
+  `;
+
+  await sql`
+    create index if not exists pipeline_runs_created_idx
+    on pipeline_runs (created_at desc)
+  `;
+
 }

@@ -4,6 +4,7 @@ import { db, ensureRavenTables, hasDatabase } from "@/lib/db";
 import { runPaperTradeEngine, reviewOpenPaperTrades } from "@/lib/paper";
 import { scorePendingSignals } from "@/lib/scoring";
 import { scanWatchlistSecFilings } from "@/lib/sec";
+import { savePipelineRun } from "@/lib/pipelineRuns";
 
 type PipelineStep = {
   name: string;
@@ -125,7 +126,7 @@ export async function runRavenPipeline() {
   const opened = steps.find((step) => step.name === "paper_trade_engine")?.result as { opened?: number } | undefined;
   const reviewed = steps.find((step) => step.name === "paper_trade_review")?.result as { closed?: number } | undefined;
 
-  return {
+  const result = {
     ok: failed.length === 0,
     phase: "RAVEN_PIPELINE_RUNNER",
     startedAt,
@@ -139,4 +140,8 @@ export async function runRavenPipeline() {
     },
     steps
   };
+
+  await savePipelineRun(result).catch(() => null);
+
+  return result;
 }
