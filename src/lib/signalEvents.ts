@@ -1,4 +1,5 @@
 import { db, ensureRavenTables, hasDatabase } from "@/lib/db";
+import { analyzeFilingPriority } from "@/lib/filingIntelligence";
 
 export type SignalSource = "SEC" | "FINRA" | "FED_REG" | "FDA" | "CONGRESS" | "NEWS";
 
@@ -43,6 +44,25 @@ type UpsertSecSignalEventInput = {
   riskLevel?: string | null;
 };
 
+type UpsertSignalEventInput = {
+  source: SignalSource | string;
+  sourceEventId: string;
+  ticker?: string | null;
+  eventType: string;
+  eventTime?: string | null;
+  headline: string;
+  summary: string;
+  sourceUrl?: string | null;
+  priority?: string | null;
+  materiality?: string | null;
+  direction?: string | null;
+  confidence?: number | null;
+  status?: string | null;
+  action?: string | null;
+  metadata?: Record<string, unknown> | null;
+};
+
+
 function cleanLabel(value: string | null | undefined) {
   return (value || "unknown").split("_").join(" ");
 }
@@ -59,10 +79,90 @@ function statusForAction(action: string) {
   return "ignored";
 }
 
+
+export async function upsertSignalEvent(input: UpsertSignalEventInput) {
+  if (!hasDatabase()) return null;
+  await ensureRavenTables();
+  const sql = db();
+
+  const confidence = Math.max(0, Math.min(100, Math.round(input.confidence || 0)));
+
+  const rows = await sql<Array<{ id: number }>>`
+    insert into signal_events (
+      source,
+      source_event_id,
+      ticker,
+      event_type,
+      event_time,
+      headline,
+      summary,
+      source_url,
+      priority,
+      materiality,
+      direction,
+      confidence,
+      status,
+      action,
+      metadata
+    ) values (
+      ${input.source},
+      ${input.sourceEventId},
+      ${input.ticker || null},
+      ${input.eventType},
+      ${input.eventTime || null},
+      ${input.headline},
+      ${input.summary},
+      ${input.sourceUrl || null},
+      ${input.priority || "unknown"},
+      ${input.materiality || "unknown"},
+      ${input.direction || "neutral"},
+      ${confidence},
+      ${input.status || "new"},
+      ${input.action || "watch"},
+      ${JSON.stringify(input.metadata || {})}::jsonb
+    )
+    on conflict (source, source_event_id) do update set
+      ticker = excluded.ticker,
+      event_type = excluded.event_type,
+      event_time = excluded.event_time,
+      headline = excluded.headline,
+      summary = excluded.summary,
+      source_url = excluded.source_url,
+      priority = excluded.priority,
+      materiality = excluded.materiality,
+      direction = excluded.direction,
+      confidence = excluded.confidence,
+      status = excluded.status,
+      action = excluded.action,
+      metadata = excluded.metadata,
+      updated_at = now()
+    returning id
+  `;
+
+  return rows[0] || null;
+}
+
+function secFallbackPriority(input: { form: string; priority?: string | null; materiality?: string | null; priorityScore?: number | null; formFamily?: string | null }) {
+  if (input.priority && input.priority !== "unknown" && input.materiality && input.materiality !== "unknown") {
+    return input;
+  }
+
+  const analyzed = analyzeFilingPriority({ form: input.form });
+  return {
+    ...input,
+    priority: input.priority && input.priority !== "unknown" ? input.priority : analyzed.priority,
+    priorityScore: input.priorityScore ?? analyzed.priorityScore,
+    materiality: input.materiality && input.materiality !== "unknown" ? input.materiality : analyzed.materiality,
+    formFamily: input.formFamily || analyzed.formFamily
+  };
+}
+
 export async function upsertSecSignalEvent(input: UpsertSecSignalEventInput) {
   if (!hasDatabase()) return null;
   await ensureRavenTables();
   const sql = db();
+
+  const enhanced = secFallbackPriority(input);
 
   const rows = await sql<Array<{ id: number }>>`
     insert into signal_events (
@@ -90,8 +190,8 @@ export async function upsertSecSignalEvent(input: UpsertSecSignalEventInput) {
       ${headlineForSecSignal(input)},
       ${input.summary},
       ${input.sourceUrl || null},
-      ${input.priority || "unknown"},
-      ${input.materiality || "unknown"},
+      ${enhanced.priority || "unknown"},
+      ${enhanced.materiality || "unknown"},
       ${input.direction || "neutral"},
       ${input.finalScore},
       ${statusForAction(input.action)},
@@ -99,8 +199,8 @@ export async function upsertSecSignalEvent(input: UpsertSecSignalEventInput) {
       ${JSON.stringify({
         scoredSignalId: input.scoredSignalId,
         category: input.category,
-        priorityScore: input.priorityScore,
-        formFamily: input.formFamily,
+        priorityScore: enhanced.priorityScore,
+        formFamily: enhanced.formFamily,
         marketConfirmation: input.marketConfirmation,
         riskLevel: input.riskLevel
       })}::jsonb
@@ -172,8 +272,6 @@ export async function backfillSecSignalEvents(limit = 30) {
       scored_signals.risk_level
     from scored_signals
     left join raw_sec_filings on raw_sec_filings.accession_number = scored_signals.accession_number
-    left join signal_events on signal_events.source = 'SEC' and signal_events.source_event_id = scored_signals.accession_number
-    where signal_events.id is null
     order by scored_signals.created_at desc
     limit ${Math.max(1, Math.min(100, limit))}
   `;

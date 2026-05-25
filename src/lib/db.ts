@@ -186,6 +186,30 @@ export async function ensureRavenTables() {
     on signal_events (confidence desc, created_at desc)
   `;
 
+
+
+  await sql`
+    create table if not exists raw_finra_short_volume (
+      id bigserial primary key,
+      trade_date date not null,
+      symbol text not null,
+      short_volume bigint not null default 0,
+      short_exempt_volume bigint not null default 0,
+      total_volume bigint not null default 0,
+      market text,
+      source_url text not null,
+      raw_payload jsonb not null default '{}'::jsonb,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now(),
+      unique(trade_date, symbol, market)
+    )
+  `;
+
+  await sql`
+    create index if not exists raw_finra_short_volume_symbol_date_idx
+    on raw_finra_short_volume (symbol, trade_date desc)
+  `;
+
   await sql`
     create table if not exists telegram_alerts (
       id bigserial primary key,
