@@ -82,27 +82,31 @@ function articleText(article: RawNewsArticle) {
   return `${article.headline} ${article.summary} ${article.symbols.join(" ")}`.toLowerCase();
 }
 
-const POSITIVE_TERMS = [
-  "beats", "beat estimates", "raises guidance", "guidance raised", "contract", "award", "partnership", "approval",
-  "cleared", "merger", "acquisition", "strategic investment", "buyback", "record revenue", "surges", "rallies"
+const STRONG_BULLISH_TERMS = [
+  "contract", "award", "government contract", "pentagon", "department of defense", "defense intelligence",
+  "approval", "cleared", "merger", "acquisition", "strategic investment", "equity stake", "chips act",
+  "$2b", "$2 billion", "funding", "raises guidance", "beats estimates", "record revenue"
 ];
 
-const NEGATIVE_TERMS = [
-  "misses", "cuts guidance", "guidance cut", "investigation", "probe", "sec charges", "lawsuit", "recall",
-  "warning", "downgrade", "offering", "dilution", "layoffs", "halts", "falls", "plunges"
-];
-
-const CATALYST_TERMS = [
-  "earnings", "revenue", "guidance", "merger", "acquisition", "contract", "award", "partnership", "approval",
-  "recall", "investigation", "sec", "fda", "short seller", "offering", "dilution", "downgrade", "upgrade",
-  "analyst", "lawsuit", "tariff", "export", "defense", "quantum", "autonomous", "vehicle safety", "student loan",
-  "regulation", "federal", "government", "probe", "warning letter"
+const STRONG_BEARISH_TERMS = [
+  "recall", "investigation", "probe", "sec charges", "lawsuit", "warning letter", "downgrade",
+  "offering", "dilution", "cuts guidance", "halts", "bankruptcy", "delisting", "fraud"
 ];
 
 const GENERIC_NOISE_TERMS = [
-  "stock market today", "why shares are moving", "market update", "dow jumps", "nasdaq", "s&p 500", "watch these stocks",
-  "most active", "premarket", "after-hours", "roundup", "meme stocks"
+  "stock market today", "why shares are moving", "what's going on", "what is going on", "market update",
+  "dow jumps", "nasdaq", "s&p 500", "watch these stocks", "most active", "premarket", "after-hours",
+  "roundup", "meme stocks", "this week in", "top 10", "are the others in your portfolio", "opinion",
+  "etf", "polymarket", "space x ipo vs", "spacex ipo vs", "same hype", "alien etf", "target selloff"
 ];
+
+const COMPANY_TERMS: Record<string, string[]> = {
+  IONQ: ["ionq", "quantum", "chips act", "commerce department", "government stake", "equity stake", "quantum companies"],
+  PLTR: ["palantir", "pltr", "pentagon", "defense intelligence agency", "dia", "data analytics", "government contract", "defense contract"],
+  SOFI: ["sofi", "student loan", "personal loan", "lending", "bank charter", "consumer finance"],
+  TSLA: ["tesla", "tsla", "model y", "robotaxi", "nhtsa", "vehicle safety", "recall", "delivery", "ev credit"],
+  DNA: ["ginkgo", "ginkgo bioworks", "synthetic biology", "biosecurity", "cell programming", "biofoundry"]
+};
 
 function includesAny(text: string, terms: string[]) {
   return terms.some((term) => text.includes(term));
@@ -112,24 +116,36 @@ function countMatches(text: string, terms: string[]) {
   return terms.reduce((count, term) => count + (text.includes(term) ? 1 : 0), 0);
 }
 
+function isDirectCompanyMatch(article: RawNewsArticle, text: string) {
+  const terms = COMPANY_TERMS[article.ticker] || [article.ticker.toLowerCase()];
+  return article.symbols.includes(article.ticker) && includesAny(text, terms);
+}
+
+function isBasketArticle(article: RawNewsArticle) {
+  return article.symbols.length >= 5;
+}
+
 function classifyNews(article: RawNewsArticle): NewsSignal | null {
   const text = articleText(article);
-  const mentionsTicker = article.symbols.includes(article.ticker) || text.includes(article.ticker.toLowerCase());
-  const catalystCount = countMatches(text, CATALYST_TERMS);
-  const positiveCount = countMatches(text, POSITIVE_TERMS);
-  const negativeCount = countMatches(text, NEGATIVE_TERMS);
+  const directCompanyMatch = isDirectCompanyMatch(article, text);
+  const strongBullishCount = countMatches(text, STRONG_BULLISH_TERMS);
+  const strongBearishCount = countMatches(text, STRONG_BEARISH_TERMS);
+  const strongCatalystCount = strongBullishCount + strongBearishCount;
   const genericNoise = includesAny(text, GENERIC_NOISE_TERMS);
+  const basketArticle = isBasketArticle(article);
 
-  if (!mentionsTicker) return null;
-  if (genericNoise && catalystCount === 0) return null;
-  if (catalystCount === 0 && positiveCount === 0 && negativeCount === 0) return null;
+  if (!directCompanyMatch) return null;
+  if (genericNoise && strongCatalystCount < 2) return null;
+  if (basketArticle && strongCatalystCount < 2) return null;
+  if (strongCatalystCount === 0) return null;
 
-  const direction: NewsSignal["direction"] = negativeCount > positiveCount ? "bearish" : positiveCount > negativeCount ? "bullish" : "neutral";
-  const confidence = Math.max(20, Math.min(100, 42 + catalystCount * 8 + Math.max(positiveCount, negativeCount) * 5 - (genericNoise ? 10 : 0)));
-  const materiality: NewsSignal["materiality"] = confidence >= 60 ? "possibly_material" : "routine";
-  const priority: NewsSignal["priority"] = confidence >= 70 ? "high" : confidence >= 50 ? "medium" : "low";
-  const action: NewsSignal["action"] = confidence >= 50 ? "watch_only" : "ignore";
-  const eventType = negativeCount > 0 ? "news_risk" : positiveCount > 0 ? "news_confirmation" : "news_context";
+  const direction: NewsSignal["direction"] = strongBearishCount > strongBullishCount ? "bearish" : strongBullishCount > strongBearishCount ? "bullish" : "neutral";
+  const base = 38 + strongCatalystCount * 10 + (directCompanyMatch ? 8 : 0) - (basketArticle ? 8 : 0) - (genericNoise ? 8 : 0);
+  const confidence = Math.max(20, Math.min(100, base));
+  const materiality: NewsSignal["materiality"] = confidence >= 62 ? "possibly_material" : "routine";
+  const priority: NewsSignal["priority"] = confidence >= 72 ? "high" : confidence >= 55 ? "medium" : "low";
+  const action: NewsSignal["action"] = confidence >= 55 ? "watch_only" : "ignore";
+  const eventType = strongBearishCount > 0 ? "news_risk" : strongBullishCount > 0 ? "news_confirmation" : "news_context";
 
   return {
     ...article,
@@ -140,7 +156,7 @@ function classifyNews(article: RawNewsArticle): NewsSignal | null {
     action,
     status: action === "watch_only" ? "watch" : "ignored",
     confidence,
-    reason: `News matched ${catalystCount} catalyst terms, ${positiveCount} bullish terms, and ${negativeCount} bearish terms.`
+    reason: `Strict news match: direct company/sector match with ${strongBullishCount} bullish catalyst terms and ${strongBearishCount} bearish catalyst terms.`
   };
 }
 
@@ -310,6 +326,55 @@ async function saveNewsSignalEvents(signals: NewsSignal[]) {
   return { saved, skipped, database: "configured" as const, errors };
 }
 
+
+async function pruneStaleNewsSignalEvents(currentSignalIds: string[]) {
+  if (!hasDatabase()) return { updated: 0, database: "not_configured" as const, errors: [] as Array<{ error: string }> };
+  await ensureRavenTables();
+  const sql = db();
+  try {
+    if (currentSignalIds.length === 0) {
+      const rows = await sql<Array<{ updated: number }>>`
+        with updated as (
+          update signal_events
+          set
+            status = 'ignored',
+            action = 'ignore',
+            priority = case when priority = 'high' then 'medium' else priority end,
+            confidence = least(confidence, 35),
+            metadata = metadata || ${JSON.stringify({ suppressionReason: "news_relevance_tightened", note: "Old broad news event suppressed by stricter Raven news filter." })}::jsonb,
+            updated_at = now()
+          where source = 'NEWS'
+          returning 1
+        )
+        select count(*)::integer as updated from updated
+      `;
+      return { updated: rows[0]?.updated || 0, database: "configured" as const, errors: [] };
+    }
+
+    const rows = await sql<Array<{ updated: number }>>`
+      with keepers as (
+        select unnest(${currentSignalIds}::text[]) as source_event_id
+      ), updated as (
+        update signal_events
+        set
+          status = 'ignored',
+          action = 'ignore',
+          priority = case when priority = 'high' then 'medium' else priority end,
+          confidence = least(confidence, 35),
+          metadata = metadata || ${JSON.stringify({ suppressionReason: "news_relevance_tightened", note: "Old broad news event suppressed by stricter Raven news filter." })}::jsonb,
+          updated_at = now()
+        where source = 'NEWS'
+          and source_event_id not in (select source_event_id from keepers)
+        returning 1
+      )
+      select count(*)::integer as updated from updated
+    `;
+    return { updated: rows[0]?.updated || 0, database: "configured" as const, errors: [] };
+  } catch (error) {
+    return { updated: 0, database: "configured" as const, errors: [{ error: error instanceof Error ? error.message : "Unknown news pruning error" }] };
+  }
+}
+
 function buildSignals(rawArticles: RawNewsArticle[]) {
   const signals: NewsSignal[] = [];
   const suppressed: SuppressedNewsMatch[] = [];
@@ -355,10 +420,12 @@ export async function scanNewsSignals() {
   const rawStorage = await saveRawNewsArticles(rawArticles);
   const { signals, suppressed } = buildSignals(rawArticles);
   const signalStorage = await saveNewsSignalEvents(signals);
+  const prunedSignalEvents = await pruneStaleNewsSignalEvents(signals.map((signal) => signal.articleId));
   const errors = [
     ...(fetched.error ? [{ provider: "alpaca", error: fetched.error }] : []),
     ...rawStorage.errors,
-    ...signalStorage.errors
+    ...signalStorage.errors,
+    ...prunedSignalEvents.errors
   ];
 
   return {
@@ -376,6 +443,7 @@ export async function scanNewsSignals() {
     signalCount: signals.length,
     weakMatchesSuppressed: suppressed.length,
     signalStorage,
+    prunedSignalEvents,
     eventsCreatedOrUpdated: signalStorage.saved + signalStorage.skipped,
     signals: signals.map((signal) => ({
       ticker: signal.ticker,
