@@ -68,7 +68,16 @@ async function getPendingRawFilings(limit: number): Promise<RawSecFilingRow[]> {
       raw_sec_filings.source_url,
       raw_sec_filings.raw_payload,
       raw_sec_filings.raw_payload->>'ravenPriority' as raven_priority,
-      nullif(raw_sec_filings.raw_payload->>'ravenPriorityScore', '')::integer as raven_priority_score,
+      coalesce(
+        nullif(raw_sec_filings.raw_payload->>'ravenPriorityScore', '')::integer,
+        case
+          when upper(raw_sec_filings.form) in ('424B5', 'NT 10-Q', 'NT 10-K') then 95
+          when upper(raw_sec_filings.form) in ('8-K', 'S-1', 'S-3', 'SC 13D', 'SC 13D/A', '13D') then 82
+          when upper(raw_sec_filings.form) in ('10-Q', '10-K', 'SC 13G', 'SC 13G/A', '13G', 'DEF 14A') then 55
+          when upper(raw_sec_filings.form) = '4' then 15
+          else 5
+        end
+      ) as raven_priority_score,
       raw_sec_filings.raw_payload->>'ravenMateriality' as raven_materiality,
       raw_sec_filings.raw_payload->>'ravenFormFamily' as raven_form_family
     from raw_sec_filings
@@ -76,7 +85,17 @@ async function getPendingRawFilings(limit: number): Promise<RawSecFilingRow[]> {
       on sec_filing_summaries.raw_filing_id = raw_sec_filings.id
     where sec_filing_summaries.id is null
     order by
-      coalesce(nullif(raw_sec_filings.raw_payload->>'ravenPriorityScore', '')::integer, 0) desc,
+      coalesce(
+        nullif(raw_sec_filings.raw_payload->>'ravenPriorityScore', '')::integer,
+        case
+          when upper(raw_sec_filings.form) in ('424B5', 'NT 10-Q', 'NT 10-K') then 95
+          when upper(raw_sec_filings.form) in ('8-K', 'S-1', 'S-3', 'SC 13D', 'SC 13D/A', '13D') then 82
+          when upper(raw_sec_filings.form) in ('10-Q', '10-K', 'SC 13G', 'SC 13G/A', '13G', 'DEF 14A') then 55
+          when upper(raw_sec_filings.form) = '4' then 15
+          else 5
+        end
+      ) desc,
+      case when upper(raw_sec_filings.form) = '4' then 1 else 0 end asc,
       raw_sec_filings.filing_date desc nulls last,
       raw_sec_filings.id desc
     limit ${limit}

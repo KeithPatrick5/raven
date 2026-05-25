@@ -15,7 +15,7 @@ async function saveFilings(filings: Awaited<ReturnType<typeof scanWatchlistSecFi
   let saved = 0;
 
   for (const filing of filings) {
-    await sql`
+    const result = await sql<{ inserted: boolean }[]>`
       insert into raw_sec_filings (
         ticker,
         cik,
@@ -39,12 +39,17 @@ async function saveFilings(filings: Awaited<ReturnType<typeof scanWatchlistSecFi
         ${filing.sourceUrl},
         ${JSON.stringify(filing.rawPayload)}::jsonb
       )
-      on conflict (accession_number) do nothing
+      on conflict (accession_number) do update set
+        primary_document = excluded.primary_document,
+        primary_document_url = excluded.primary_document_url,
+        source_url = excluded.source_url,
+        raw_payload = raw_sec_filings.raw_payload || excluded.raw_payload
+      returning (xmax = 0) as inserted
     `;
-    saved += 1;
+    if (Array.isArray(result) && result[0]?.inserted) saved += 1;
   }
 
-  return { saved, skipped: 0, database: "configured" as const };
+  return { saved, skipped: filings.length - saved, database: "configured" as const };
 }
 
 async function runSecScan() {
