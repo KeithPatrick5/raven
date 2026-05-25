@@ -7,6 +7,7 @@ import { getTradingSafetyStatus, type TradingSafetyStatus } from "@/lib/tradingS
 import { getLatestPipelineRuns } from "@/lib/pipelineRuns";
 import { getActiveRadarTickers } from "@/lib/radar";
 import { getLatestScoredSignals } from "@/lib/scoring";
+import { getPerformanceSnapshot, performanceWindows } from "@/lib/performance";
 import { getLatestSignalEvents, getSignalSourceHealth } from "@/lib/signalEvents";
 import { watchlist } from "@/lib/watchlist";
 
@@ -227,8 +228,16 @@ async function safeRadarTickers() {
   }
 }
 
+async function safePerformanceSnapshot() {
+  try {
+    return await getPerformanceSnapshot("24h");
+  } catch {
+    return null;
+  }
+}
+
 export default async function Home() {
-  const [paperAccount, paperPlan, paperExecution, paperLifecycle, tradingSafety, signals, signalEvents, sourceHealth, paperTrades, paperDecisions, pipelineRuns, radarTickers] = await Promise.all([
+  const [paperAccount, paperPlan, paperExecution, paperLifecycle, tradingSafety, signals, signalEvents, sourceHealth, paperTrades, paperDecisions, pipelineRuns, radarTickers, performanceSnapshot] = await Promise.all([
     safeAlpacaPaperAccount(),
     safePaperPlan(),
     safePaperExecution(),
@@ -240,7 +249,8 @@ export default async function Home() {
     safePaperTrades(),
     safePaperDecisions(),
     safePipelineRuns(),
-    safeRadarTickers()
+    safeRadarTickers(),
+    safePerformanceSnapshot()
   ]);
 
   const latestRun = pipelineRuns[0];
@@ -252,6 +262,11 @@ export default async function Home() {
   const latestDecision = paperDecisions[0];
   const latestErrors = latestRun?.steps_failed || 0;
   const lastRunOutcome = latestRun ? runOutcome(latestRun) : "none";
+  const performance = performanceSnapshot && performanceSnapshot.ok ? performanceSnapshot : null;
+  const performanceRuns = performance?.runs as Record<string, unknown> | undefined;
+  const performanceShadows = performance?.shadows as { count: number; avgPnlPercent: number; best?: { ticker: string; pnlPercent: number; finalScore: number } | null; worst?: { ticker: string; pnlPercent: number; finalScore: number } | null; items?: Array<{ ticker: string; pnlPercent: number; finalScore: number; action: string }> } | undefined;
+  const performanceRejects = performance?.rejects as { count: number; topReasons: Array<{ name: string; count: number }> } | undefined;
+  const performanceOrders = performance?.orders as { submitted: number; filled: number; rejected: number; error: number } | undefined;
 
   return (
     <main className="raven-shell">
@@ -266,6 +281,7 @@ export default async function Home() {
 
         <nav className="nav" aria-label="Raven navigation">
           <a className="nav-item active" href="#overview">Overview <span className="nav-pill">live</span></a>
+          <a className="nav-item" href="#performance">Performance <span className="nav-pill">24h</span></a>
           <a className="nav-item" href="#account">Paper account <span className="nav-pill">read</span></a>
           <a className="nav-item" href="#safety">Safety <span className="nav-pill">{tradingSafety?.mode || "paper"}</span></a>
           <a className="nav-item" href="#plan">Trade plan <span className="nav-pill">{paperPlan?.eligible || 0}</span></a>
@@ -330,6 +346,56 @@ export default async function Home() {
 
         <div className="grid">
           <div className="left-stack">
+            <section className="panel" id="performance">
+              <div className="panel-header">
+                <div>
+                  <div className="panel-title">Operator performance</div>
+                  <div className="panel-meta">Phase 15. Time-window view for runs, rejects, paper orders, and shadow trades.</div>
+                </div>
+                <span className="badge blue">24h</span>
+              </div>
+              {performance ? (
+                <>
+                  <form action="/api/performance/report" method="get" className="market-strip" style={{ padding: "0 13px 12px" }}>
+                    <label className="panel-meta" htmlFor="window">Window</label>
+                    <select id="window" name="window" className="select-control" defaultValue="24h">
+                      {Object.entries(performanceWindows).map(([key, item]) => (
+                        <option key={key} value={key}>{item.label}</option>
+                      ))}
+                    </select>
+                    <button className="ghost-button" type="submit">Copy report</button>
+                    <a className="badge blue" href="/api/performance?window=24h">JSON</a>
+                  </form>
+                  <div className="run-summary run-summary-tight">
+                    <div><span>Runs</span><strong>{Number(performanceRuns?.runs || 0)}</strong></div>
+                    <div><span>Failed</span><strong className={Number(performanceRuns?.failed_runs || 0) ? "text-red" : "text-green"}>{Number(performanceRuns?.failed_runs || 0)}</strong></div>
+                    <div><span>Scored</span><strong>{Number(performance?.signals?.scored || 0)}</strong></div>
+                    <div><span>Paper orders</span><strong>{performanceOrders?.submitted || 0}</strong></div>
+                    <div><span>Rejected</span><strong>{performanceRejects?.count || 0}</strong></div>
+                    <div><span>Shadows</span><strong>{performanceShadows?.count || 0}</strong></div>
+                    <div><span>Avg shadow</span><strong className={(performanceShadows?.avgPnlPercent || 0) >= 0 ? "text-green" : "text-red"}>{(performanceShadows?.avgPnlPercent || 0).toFixed(2)}%</strong></div>
+                    <div><span>Best shadow</span><strong>{performanceShadows?.best ? `${performanceShadows.best.ticker} ${performanceShadows.best.pnlPercent.toFixed(2)}%` : "none"}</strong></div>
+                  </div>
+                  <div className="signal-list">
+                    {(performanceShadows?.items || []).slice(0, 3).map((shadow) => (
+                      <article className="signal-card" key={`${shadow.ticker}-${shadow.finalScore}-${shadow.action}`}>
+                        <div className="signal-head">
+                          <div>
+                            <div className="signal-title">{shadow.ticker} · shadow trade</div>
+                            <div className="panel-meta">{cleanLabel(shadow.action)} · score {shadow.finalScore}</div>
+                          </div>
+                          <div className={`score ${shadow.pnlPercent >= 0 ? "green" : "red"}`}>{shadow.pnlPercent > 0 ? "+" : ""}{shadow.pnlPercent.toFixed(2)}%</div>
+                        </div>
+                      </article>
+                    ))}
+                    {!(performanceShadows?.items || []).length ? <div className="empty-state">No shadow trades in the 24h window yet.</div> : null}
+                  </div>
+                </>
+              ) : (
+                <div className="empty-state">Performance snapshot unavailable.</div>
+              )}
+            </section>
+
             <section className="panel" id="account">
               <div className="panel-header">
                 <div>

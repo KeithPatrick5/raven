@@ -86,6 +86,11 @@ function sourceStepLine(run: PipelineLike, name: string, label: string) {
     const status = found.ok && data.ok !== false ? "ok" : "needs attention";
     return `${label}: ${status} | ${seconds(found.durationMs)} | open positions ${num(data.openPositions)} | open orders ${num(data.openOrders)} | pending exits ${num(data.pendingExits)}`;
   }
+  if (name === "shadow_trade_sync") {
+    const status = found.ok && data.ok !== false ? "ok" : "needs attention";
+    return `${label}: ${status} | ${seconds(found.durationMs)} | reviewed ${num(data.reviewed)} | created ${num(data.created)} | updated ${num(data.updated)} | active ${num(data.active)}`;
+  }
+
 
   if (name === "radar_sync") {
     const radarCount = num(data.radarCount);
@@ -260,6 +265,7 @@ export function buildPipelineTextReport(run: PipelineLike) {
     sourceStepLine(run, "sec_discovery_radar", "SEC Discovery"),
     sourceStepLine(run, "radar_sync", "Radar"),
     sourceStepLine(run, "paper_order_execution", "Paper Execution"),
+    sourceStepLine(run, "shadow_trade_sync", "Shadow Trades"),
     sourceStepLine(run, "paper_position_lifecycle", "Lifecycle"),
     "",
     "TOP SIGNALS THIS RUN",

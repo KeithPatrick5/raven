@@ -14,6 +14,7 @@ import { scanCongressSignals } from "@/lib/congress";
 import { syncRadarFromSignalEvents } from "@/lib/radar";
 import { runPaperOrderExecution } from "@/lib/paperExecution";
 import { getPaperPositionLifecycle } from "@/lib/paperLifecycle";
+import { syncShadowTrades } from "@/lib/performance";
 
 type PipelineStep = {
   name: string;
@@ -141,6 +142,7 @@ export async function runRavenPipeline() {
   steps.push(await runStep("score_signals", () => scorePendingSignals(10)));
   steps.push(await runStep("paper_trade_engine", () => runPaperTradeEngine(10)));
   steps.push(await runStep("paper_order_execution", () => runPaperOrderExecution({ submit: true })));
+  steps.push(await runStep("shadow_trade_sync", () => syncShadowTrades(25)));
   steps.push(await runStep("paper_position_lifecycle", getPaperPositionLifecycle));
   steps.push(await runStep("paper_trade_review", () => reviewOpenPaperTrades(10)));
 

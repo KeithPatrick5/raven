@@ -640,3 +640,12 @@ h1 {
   background: rgba(3, 5, 8, 0.42);
   padding: 12px;
 }
+
+.select-control {
+  background: rgba(5, 9, 18, 0.78);
+  border: 1px solid rgba(116, 130, 157, 0.28);
+  border-radius: 10px;
+  color: #e7edf7;
+  font: inherit;
+  padding: 8px 10px;
+}
