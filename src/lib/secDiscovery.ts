@@ -32,6 +32,7 @@ type DiscoverySignal = {
   materiality: string;
   formFamily: string;
   action: string;
+  direction: string;
   confidence: number;
   headline: string;
   summary: string;
@@ -92,14 +93,99 @@ function cleanCompanyName(title: string, form: string) {
   return value || title;
 }
 
-function actionForPriority(priorityScore: number) {
-  if (priorityScore >= 88) return "high_watch";
-  if (priorityScore >= 70) return "watch_only";
-  return "ignore";
+function normalizeDiscoveryForm(form: string) {
+  return form.trim().toUpperCase();
 }
 
-function confidenceForPriority(priorityScore: number, core: boolean) {
-  return Math.max(0, Math.min(100, Math.round(priorityScore + (core ? 0 : 4))));
+type DiscoveryInterpretation = {
+  action: string;
+  direction: string;
+  confidence: number;
+  headlineLabel: string;
+  summaryLabel: string;
+};
+
+function interpretDiscoveryForm(form: string, priorityScore: number, core: boolean): DiscoveryInterpretation {
+  const normalized = normalizeDiscoveryForm(form);
+  const coreBoost = core ? 0 : 2;
+
+  if (normalized === "424B5") {
+    return {
+      action: "dilution_watch",
+      direction: "bearish",
+      confidence: Math.min(92, 88 + coreBoost),
+      headlineLabel: "offering / dilution watch",
+      summaryLabel: "424B5 prospectus supplement. Raven treats this as possible offering, dilution, or financing risk until market reaction confirms otherwise."
+    };
+  }
+
+  if (normalized === "S-3") {
+    return {
+      action: "shelf_watch",
+      direction: "bearish",
+      confidence: Math.min(86, 82 + coreBoost),
+      headlineLabel: "shelf registration watch",
+      summaryLabel: "S-3 registration or shelf filing. Raven treats this as possible future issuance or dilution risk."
+    };
+  }
+
+  if (normalized === "S-1") {
+    return {
+      action: "registration_watch",
+      direction: "neutral",
+      confidence: Math.min(84, 80 + coreBoost),
+      headlineLabel: "registration watch",
+      summaryLabel: "S-1 registration filing. Raven treats this as a speculative registration event that needs price, volume, and company-quality confirmation."
+    };
+  }
+
+  if (normalized.includes("13D")) {
+    return {
+      action: "activist_watch",
+      direction: "bullish",
+      confidence: Math.min(88, 84 + coreBoost),
+      headlineLabel: "activist / ownership watch",
+      summaryLabel: "Schedule 13D ownership filing. Raven treats this as a possible activist or strategic ownership signal, not an automatic trade."
+    };
+  }
+
+  if (normalized.includes("13G")) {
+    return {
+      action: "ownership_watch",
+      direction: "neutral",
+      confidence: Math.min(74, 70 + coreBoost),
+      headlineLabel: "passive ownership watch",
+      summaryLabel: "Schedule 13G ownership filing. Raven treats this as passive ownership context unless other catalysts line up."
+    };
+  }
+
+  if (normalized === "NT 10-Q" || normalized === "NT 10-K") {
+    return {
+      action: "late_filing_risk",
+      direction: "bearish",
+      confidence: Math.min(90, 86 + coreBoost),
+      headlineLabel: "late filing risk",
+      summaryLabel: "Late filing notice. Raven treats this as accounting, reporting, or operational risk until clarified."
+    };
+  }
+
+  if (normalized === "8-K") {
+    return {
+      action: priorityScore >= 80 ? "material_event_watch" : "watch_only",
+      direction: "neutral",
+      confidence: Math.min(84, Math.max(70, priorityScore + coreBoost)),
+      headlineLabel: "material event watch",
+      summaryLabel: "8-K material event filing. Raven treats this as a catalyst candidate that needs classification and price/volume confirmation."
+    };
+  }
+
+  return {
+    action: priorityScore >= 70 ? "watch_only" : "ignore",
+    direction: "neutral",
+    confidence: Math.max(0, Math.min(100, Math.round(priorityScore + coreBoost))),
+    headlineLabel: "SEC discovery watch",
+    summaryLabel: "SEC discovery filing. Raven added it to radar for short-term monitoring."
+  };
 }
 
 function parseAtom(xml: string, form: string): AtomEntry[] {
@@ -229,8 +315,9 @@ export async function scanSecDiscoveryRadar() {
     const priority = analyzeFilingPriority({ form: entry.form });
     if (priority.priorityScore < 70) continue;
 
-    const headline = `${ticker} SEC discovery: ${entry.form}`;
-    const summary = `${ticker} surfaced from SEC discovery through a ${entry.form} filing for ${match.title || entry.companyName}. Raven added it to radar for short-term monitoring.`;
+    const interpretation = interpretDiscoveryForm(entry.form, priority.priorityScore, CORE_TICKERS.has(ticker));
+    const headline = `${ticker} SEC discovery: ${interpretation.headlineLabel}`;
+    const summary = `${interpretation.summaryLabel} Filing: ${entry.form}. Company: ${match.title || entry.companyName}.`;
     signals.push({
       ticker,
       form: entry.form,
@@ -242,8 +329,9 @@ export async function scanSecDiscoveryRadar() {
       priorityScore: priority.priorityScore,
       materiality: priority.materiality,
       formFamily: priority.formFamily,
-      action: actionForPriority(priority.priorityScore),
-      confidence: confidenceForPriority(priority.priorityScore, CORE_TICKERS.has(ticker)),
+      action: interpretation.action,
+      direction: interpretation.direction,
+      confidence: interpretation.confidence,
       headline,
       summary,
       sourceUrl: entry.filingUrl
@@ -268,7 +356,7 @@ export async function scanSecDiscoveryRadar() {
         sourceUrl: signal.sourceUrl,
         priority: signal.priority,
         materiality: signal.materiality,
-        direction: "neutral",
+        direction: signal.direction,
         confidence: signal.confidence,
         status: "watch",
         action: signal.action,
@@ -278,7 +366,7 @@ export async function scanSecDiscoveryRadar() {
           formFamily: signal.formFamily,
           priorityScore: signal.priorityScore,
           coreWatchlist: CORE_TICKERS.has(signal.ticker),
-          note: "SEC discovery adds non-core tickers to radar. It does not trigger trades by itself."
+          note: "SEC discovery adds non-core tickers to radar. Offering and late-filing events are risk/dilution watches, not bullish trade calls."
         }
       });
       eventsCreatedOrUpdated += 1;
@@ -309,6 +397,7 @@ export async function scanSecDiscoveryRadar() {
       priority: signal.priority,
       materiality: signal.materiality,
       action: signal.action,
+      direction: signal.direction,
       confidence: signal.confidence,
       headline: signal.headline,
       sourceUrl: signal.sourceUrl

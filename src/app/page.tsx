@@ -41,8 +41,8 @@ function sourceLabel(source: string) {
 
 function actionTone(action: string) {
   if (action === "paper_trade_candidate") return "green";
-  if (action === "high_watch" || action === "watch_only") return "blue";
-  if (action === "danger_watch") return "amber";
+  if (action === "high_watch" || action === "watch_only" || action === "material_event_watch" || action === "activist_watch" || action === "ownership_watch" || action === "registration_watch") return "blue";
+  if (action === "danger_watch" || action === "dilution_watch" || action === "shelf_watch" || action === "late_filing_risk") return "amber";
   if (action === "avoid") return "red";
   return "red";
 }
