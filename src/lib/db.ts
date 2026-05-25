@@ -535,6 +535,41 @@ export async function ensureRavenTables() {
 
 
   await sql`
+    create table if not exists paper_order_submissions (
+      id bigserial primary key,
+      scored_signal_id bigint references scored_signals(id) on delete set null,
+      accession_number text,
+      ticker text not null,
+      side text not null,
+      status text not null,
+      requested_notional numeric,
+      estimated_shares numeric,
+      stop_price numeric,
+      target_price numeric,
+      max_hold_days integer,
+      client_order_id text unique,
+      alpaca_order_id text,
+      raw_plan jsonb not null default '{}'::jsonb,
+      raw_order jsonb not null default '{}'::jsonb,
+      error_message text,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now(),
+      unique(scored_signal_id)
+    )
+  `;
+
+  await sql`
+    create index if not exists paper_order_submissions_status_created_idx
+    on paper_order_submissions (status, created_at desc)
+  `;
+
+  await sql`
+    create index if not exists paper_order_submissions_ticker_created_idx
+    on paper_order_submissions (ticker, created_at desc)
+  `;
+
+
+  await sql`
     create table if not exists pipeline_runs (
       id bigserial primary key,
       status text not null,

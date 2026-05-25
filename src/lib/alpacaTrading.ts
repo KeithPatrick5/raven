@@ -121,18 +121,25 @@ function round(value: number | null, decimals = 2) {
   return Math.round(value * factor) / factor;
 }
 
-async function alpacaTradingRequest<T>(path: string, searchParams?: Record<string, string>) {
+async function alpacaTradingRequest<T>(
+  path: string,
+  searchParams?: Record<string, string>,
+  init?: { method?: "GET" | "POST"; body?: unknown }
+) {
   const url = new URL(`${alpacaTradingBaseUrl()}${path}`);
   for (const [key, value] of Object.entries(searchParams || {})) {
     url.searchParams.set(key, value);
   }
 
   const response = await fetch(url.toString(), {
+    method: init?.method || "GET",
     headers: {
       "APCA-API-KEY-ID": apiKeyId(),
       "APCA-API-SECRET-KEY": apiSecretKey(),
-      Accept: "application/json"
+      Accept: "application/json",
+      ...(init?.body ? { "Content-Type": "application/json" } : {})
     },
+    body: init?.body ? JSON.stringify(init.body) : undefined,
     cache: "no-store"
   });
 
@@ -158,6 +165,28 @@ export async function getAlpacaPaperOrders(limit = 20, status: "open" | "closed"
     limit: String(Math.max(1, Math.min(100, Math.floor(limit)))),
     direction: "desc",
     nested: "false"
+  });
+}
+
+export type AlpacaPaperMarketOrderRequest = {
+  symbol: string;
+  side: "buy";
+  notional: number;
+  clientOrderId: string;
+};
+
+export async function submitAlpacaPaperMarketOrder(request: AlpacaPaperMarketOrderRequest) {
+  const notional = Math.max(1, Math.round(request.notional * 100) / 100);
+  return alpacaTradingRequest<AlpacaPaperOrder>("/v2/orders", undefined, {
+    method: "POST",
+    body: {
+      symbol: request.symbol.toUpperCase(),
+      side: request.side,
+      type: "market",
+      time_in_force: "day",
+      notional: notional.toFixed(2),
+      client_order_id: request.clientOrderId
+    }
   });
 }
 

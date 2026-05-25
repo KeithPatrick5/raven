@@ -1,6 +1,7 @@
 import { getAlpacaPaperSnapshot, type PaperAccountSnapshot } from "@/lib/alpacaTrading";
 import { getLatestPaperDecisions, getLatestPaperTrades } from "@/lib/paper";
 import { getPaperTradePlan } from "@/lib/paperPlanner";
+import { runPaperOrderExecution } from "@/lib/paperExecution";
 import { getLatestPipelineRuns } from "@/lib/pipelineRuns";
 import { getActiveRadarTickers } from "@/lib/radar";
 import { getLatestScoredSignals } from "@/lib/scoring";
@@ -184,6 +185,14 @@ async function safePaperPlan() {
   }
 }
 
+async function safePaperExecution() {
+  try {
+    return await runPaperOrderExecution({ submit: false });
+  } catch {
+    return null;
+  }
+}
+
 async function safePipelineRuns() {
   try {
     return await getLatestPipelineRuns(6);
@@ -201,9 +210,10 @@ async function safeRadarTickers() {
 }
 
 export default async function Home() {
-  const [paperAccount, paperPlan, signals, signalEvents, sourceHealth, paperTrades, paperDecisions, pipelineRuns, radarTickers] = await Promise.all([
+  const [paperAccount, paperPlan, paperExecution, signals, signalEvents, sourceHealth, paperTrades, paperDecisions, pipelineRuns, radarTickers] = await Promise.all([
     safeAlpacaPaperAccount(),
     safePaperPlan(),
+    safePaperExecution(),
     safeSignals(),
     safeSignalEvents(),
     safeSourceHealth(),
@@ -400,6 +410,52 @@ export default async function Home() {
                 </>
               ) : (
                 <div className="empty-state">Paper planner unavailable.</div>
+              )}
+            </section>
+
+            <section className="panel" id="execute" style={{ marginTop: 14 }}>
+              <div className="panel-header">
+                <div>
+                  <div className="panel-title">Paper execution switch</div>
+                  <div className="panel-meta">13C. Disabled by default. POST only when explicitly enabled.</div>
+                </div>
+                {paperExecution ? <span className={`badge ${paperExecution.paperTradingEnabled ? "green" : "amber"}`}>{paperExecution.paperTradingEnabled ? "enabled" : "disabled"}</span> : <span className="badge amber">offline</span>}
+              </div>
+              {paperExecution ? (
+                <>
+                  <div className="run-summary run-summary-tight">
+                    <div><span>Order submit</span><strong className={paperExecution.orderSubmission === "submitted" ? "text-green" : "text-amber"}>{cleanLabel(paperExecution.orderSubmission)}</strong></div>
+                    <div><span>Eligible</span><strong>{paperExecution.eligible}</strong></div>
+                    <div><span>Reviewed</span><strong>{paperExecution.candidatesReviewed}</strong></div>
+                    <div><span>Live trading</span><strong className="text-red">disabled</strong></div>
+                    <div><span>Paper switch</span><strong>{paperExecution.paperTradingEnabled ? "on" : "off"}</strong></div>
+                    <div><span>Duplicate safe</span><strong>{paperExecution.duplicate ? "blocked" : "ready"}</strong></div>
+                  </div>
+                  {paperExecution.selectedPlan ? (
+                    <article className="signal-card">
+                      <div className="signal-head">
+                        <div>
+                          <div className="signal-title">{paperExecution.selectedPlan.ticker} · selected plan</div>
+                          <div className="panel-meta">{cleanLabel(paperExecution.selectedPlan.action)} · score {paperExecution.selectedPlan.score}</div>
+                        </div>
+                        <div className={`score ${scoreTone(paperExecution.selectedPlan.score)}`}>{paperExecution.selectedPlan.score}</div>
+                      </div>
+                      <p className="signal-copy">{paperExecution.selectedPlan.summary}</p>
+                      <div className="market-strip">
+                        <span>notional {money(paperExecution.selectedPlan.suggestedNotional)}</span>
+                        <span>shares {paperExecution.selectedPlan.estimatedShares ?? "--"}</span>
+                        <span>stop {money(paperExecution.selectedPlan.stopPrice)}</span>
+                        <span>target {money(paperExecution.selectedPlan.targetPrice)}</span>
+                      </div>
+                    </article>
+                  ) : <div className="empty-state">No eligible candidate for execution.</div>}
+                  <div className="market-strip" style={{ padding: "0 13px 12px" }}>
+                    <a className="badge blue" href="/api/paper/execute">Execution preview</a>
+                    <a className="badge blue" href="/api/paper/execute/report">Execution report</a>
+                  </div>
+                </>
+              ) : (
+                <div className="empty-state">Paper execution switch unavailable.</div>
               )}
             </section>
 

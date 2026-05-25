@@ -25,6 +25,7 @@ export type PaperPlanCandidate = {
 };
 
 export type PaperTradePlan = {
+  scoredSignalId: number;
   ticker: string;
   accessionNumber: string;
   form: string;
@@ -210,6 +211,7 @@ function planCandidate(
   const risks = parseList(row.risk_flags);
 
   return {
+    scoredSignalId: row.scored_signal_id,
     ticker: row.ticker,
     accessionNumber: row.accession_number,
     form: row.form,
