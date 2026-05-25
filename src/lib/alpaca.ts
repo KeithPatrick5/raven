@@ -1,5 +1,54 @@
 import { db, ensureRavenTables, hasDatabase } from "@/lib/db";
 
+export type AlpacaConfirmation = {
+  id: number;
+  summary_id: number;
+  ticker: string;
+  latest_close: number | null;
+  previous_close: number | null;
+  price_change_percent: number | null;
+  latest_volume: number | null;
+  avg_20d_volume: number | null;
+  relative_volume: number | null;
+  latest_bar_time: string | null;
+  liquidity_status: string;
+  price_status: string;
+  confirmation_status: string;
+  created_at: string;
+};
+
+type PendingSummaryRow = {
+  id: number;
+  ticker: string;
+  accession_number: string;
+  form: string;
+  tradeability: number;
+  created_at: string;
+};
+
+type AlpacaBar = {
+  c?: number;
+  h?: number;
+  l?: number;
+  n?: number;
+  o?: number;
+  t?: string;
+  v?: number;
+  vw?: number;
+};
+
+function apiKeyId() {
+  return (process.env.ALPACA_API_KEY_ID || process.env.APCA_API_KEY_ID || "").trim();
+}
+
+function apiSecretKey() {
+  return (process.env.ALPACA_API_SECRET_KEY || process.env.APCA_API_SECRET_KEY || "").trim();
+}
+
+export function hasAlpacaProvider() {
+  return Boolean(apiKeyId() && apiSecretKey());
+}
+
 
 export type AlpacaAccountMode = "paper" | "live";
 
@@ -54,18 +103,6 @@ export type AlpacaOrder = {
   canceled_at?: string | null;
 };
 
-
-export type AlpacaCreateOrderInput = {
-  symbol: string;
-  side: "buy" | "sell";
-  type?: "market" | "limit";
-  time_in_force?: "day" | "gtc" | "opg" | "cls" | "ioc" | "fok";
-  qty?: string;
-  notional?: string;
-  limit_price?: string;
-  client_order_id?: string;
-};
-
 export type PaperAccountSnapshot = {
   ok: boolean;
   mode: AlpacaAccountMode;
@@ -89,81 +126,23 @@ export type PaperAccountSnapshot = {
   errors: Array<{ error: string }>;
 };
 
-export type AlpacaConfirmation = {
-  id: number;
-  summary_id: number;
-  ticker: string;
-  latest_close: number | null;
-  previous_close: number | null;
-  price_change_percent: number | null;
-  latest_volume: number | null;
-  avg_20d_volume: number | null;
-  relative_volume: number | null;
-  latest_bar_time: string | null;
-  liquidity_status: string;
-  price_status: string;
-  confirmation_status: string;
-  created_at: string;
-};
-
-type PendingSummaryRow = {
-  id: number;
-  ticker: string;
-  accession_number: string;
-  form: string;
-  tradeability: number;
-  created_at: string;
-};
-
-type AlpacaBar = {
-  c?: number;
-  h?: number;
-  l?: number;
-  n?: number;
-  o?: number;
-  t?: string;
-  v?: number;
-  vw?: number;
-};
-
-function apiKeyId() {
-  return (process.env.ALPACA_API_KEY_ID || process.env.APCA_API_KEY_ID || "").trim();
-}
-
-function apiSecretKey() {
-  return (process.env.ALPACA_API_SECRET_KEY || process.env.APCA_API_SECRET_KEY || "").trim();
-}
-
-export function hasAlpacaProvider() {
-  return Boolean(apiKeyId() && apiSecretKey());
-}
-
-
 function tradingBaseUrl(mode: AlpacaAccountMode = "paper") {
   const paperUrl = process.env.ALPACA_PAPER_TRADING_BASE_URL || process.env.ALPACA_PAPER_BASE_URL || "https://paper-api.alpaca.markets";
   const liveUrl = process.env.ALPACA_LIVE_TRADING_BASE_URL || process.env.ALPACA_LIVE_BASE_URL || "https://api.alpaca.markets";
-  const selected = mode === "live" ? liveUrl : paperUrl;
-  return selected.replace(/\/$/, "");
+  return (mode === "live" ? liveUrl : paperUrl).replace(/\/$/, "");
 }
 
-async function alpacaTradingRequest<T>(
-  path: string,
-  mode: AlpacaAccountMode = "paper",
-  init: { method?: "GET" | "POST" | "DELETE"; body?: unknown } = {}
-): Promise<T> {
+async function alpacaTradingRequest<T>(path: string, mode: AlpacaAccountMode = "paper"): Promise<T> {
   if (!hasAlpacaProvider()) {
     throw new Error("ALPACA_API_KEY_ID and ALPACA_API_SECRET_KEY are not configured.");
   }
 
   const response = await fetch(`${tradingBaseUrl(mode)}/v2${path}`, {
-    method: init.method || "GET",
     headers: {
       "APCA-API-KEY-ID": apiKeyId(),
       "APCA-API-SECRET-KEY": apiSecretKey(),
-      Accept: "application/json",
-      ...(init.body ? { "Content-Type": "application/json" } : {})
+      Accept: "application/json"
     },
-    body: init.body ? JSON.stringify(init.body) : undefined,
     cache: "no-store"
   });
 
@@ -216,21 +195,6 @@ export async function getAlpacaOrders(mode: AlpacaAccountMode = "paper", status:
   });
 
   return alpacaTradingRequest<AlpacaOrder[]>(`/orders?${params.toString()}`, mode);
-}
-
-export async function createAlpacaPaperOrder(input: AlpacaCreateOrderInput) {
-  const order = {
-    symbol: input.symbol.toUpperCase(),
-    side: input.side,
-    type: input.type || "market",
-    time_in_force: input.time_in_force || "day",
-    ...(input.qty ? { qty: input.qty } : {}),
-    ...(input.notional ? { notional: input.notional } : {}),
-    ...(input.limit_price ? { limit_price: input.limit_price } : {}),
-    ...(input.client_order_id ? { client_order_id: input.client_order_id } : {})
-  };
-
-  return alpacaTradingRequest<AlpacaOrder>("/orders", "paper", { method: "POST", body: order });
 }
 
 export async function getPaperAccountSnapshot(): Promise<PaperAccountSnapshot> {

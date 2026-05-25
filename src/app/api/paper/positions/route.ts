@@ -1,20 +1,16 @@
-import { NextResponse } from "next/server";
-import { getPaperAccountSnapshot } from "@/lib/alpaca";
+import { getAlpacaPositions, hasAlpacaProvider } from "@/lib/alpaca";
 
-export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  const snapshot = await getPaperAccountSnapshot();
+  if (!hasAlpacaProvider()) {
+    return Response.json({ ok: false, mode: "paper", positions: [], errors: [{ error: "Alpaca paper credentials are not configured." }] }, { status: 200 });
+  }
 
-  return NextResponse.json({
-    phase: "PAPER_POSITIONS_READ_ONLY",
-    ok: snapshot.ok,
-    mode: snapshot.mode,
-    liveTrading: snapshot.liveTrading,
-    alpaca: snapshot.alpaca,
-    count: snapshot.positions.length,
-    positions: snapshot.positions,
-    errors: snapshot.errors
-  }, { status: snapshot.ok ? 200 : 207 });
+  try {
+    const positions = await getAlpacaPositions("paper");
+    return Response.json({ ok: true, mode: "paper", positions });
+  } catch (error) {
+    return Response.json({ ok: false, mode: "paper", positions: [], errors: [{ error: error instanceof Error ? error.message : "Unknown Alpaca positions failure" }] }, { status: 200 });
+  }
 }
