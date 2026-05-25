@@ -158,7 +158,6 @@ export async function rankSignalCandidates(limit = 80) {
 
   let upserted = 0;
   const tierCounts: Record<string, number> = {};
-  const topCandidates: Array<Record<string, unknown>> = [];
   const errors: Array<{ ticker?: string; error: string }> = [];
 
   for (const event of events) {
@@ -200,13 +199,43 @@ export async function rankSignalCandidates(limit = 80) {
           updated_at = now()
       `;
       upserted += 1;
-      if (topCandidates.length < 12 && ranked.tier !== "ignore") {
-        topCandidates.push({ ticker: event.ticker, source: event.source, tier: ranked.tier, eventQualityScore: ranked.eventQualityScore, tradeBias: ranked.tradeBias, action: event.action, headline: cleanSummary(event.headline), reason: ranked.reason });
-      }
     } catch (error) {
       errors.push({ ticker: event.ticker || undefined, error: error instanceof Error ? error.message : "Unknown candidate ranking error" });
     }
   }
+
+  const topRows = await sql<Array<{
+    ticker: string;
+    source: string;
+    tier: string;
+    event_quality_score: number;
+    trade_bias: string;
+    source_action: string;
+    headline: string;
+    ranking_reason: string;
+  }>>`
+    select ticker, source, tier, event_quality_score, trade_bias, source_action, headline, ranking_reason
+    from candidate_rankings
+    where status = 'active'
+      and tier <> 'ignore'
+      and updated_at >= now() - interval '14 days'
+    order by
+      case tier when 'tier_1' then 1 when 'tier_2' then 2 when 'risk_only' then 3 when 'tier_3' then 4 else 5 end asc,
+      case source when 'SEC_DISCOVERY' then 1 when 'SEC' then 2 when 'FDA' then 3 when 'FINRA' then 4 when 'FED_REG' then 5 when 'NEWS' then 6 else 7 end asc,
+      event_quality_score desc,
+      updated_at desc
+    limit 12
+  `;
+  const topCandidates = topRows.map((row) => ({
+    ticker: row.ticker,
+    source: row.source,
+    tier: row.tier,
+    eventQualityScore: row.event_quality_score,
+    tradeBias: row.trade_bias,
+    action: row.source_action,
+    headline: cleanSummary(row.headline),
+    reason: row.ranking_reason
+  }));
 
   return {
     ok: errors.length === 0,
@@ -239,8 +268,8 @@ export async function getCandidateRankingReport(limit = 12) {
     `Risk-only: ${Number((result.tiers as Record<string, number>).risk_only || 0)}`,
     `Ignore: ${Number((result.tiers as Record<string, number>).ignore || 0)}`,
     "",
-    "TOP CANDIDATES",
-    "--------------"
+    "TOP RANKED TRADE / RISK CANDIDATES",
+    "----------------------------------"
   ];
   if (!result.topCandidates.length) lines.push("None");
   for (const item of result.topCandidates.slice(0, limit)) {

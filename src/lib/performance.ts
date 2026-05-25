@@ -92,6 +92,11 @@ async function ensurePerformanceTables() {
   `;
 
   await sql`
+    create index if not exists paper_shadow_trades_accession_idx
+    on paper_shadow_trades (accession_number)
+  `;
+
+  await sql`
     create index if not exists paper_shadow_trades_ticker_created_idx
     on paper_shadow_trades (ticker, created_at desc)
   `;
@@ -117,6 +122,112 @@ async function latestCloseForTicker(ticker: string): Promise<number | null> {
   } catch {
     return null;
   }
+}
+
+
+async function syncMarketAnomalyShadowTrades(limit = 12) {
+  const sql = db();
+  const rows = await sql<Array<{
+    ticker: string;
+    latest_close: string | null;
+    anomaly_score: number;
+    anomaly_status: string;
+    direction: string;
+    price_change_percent: string | null;
+    relative_volume: string | null;
+    reasons: unknown;
+    updated_at: string;
+  }>>`
+    select
+      ticker,
+      latest_close::text,
+      anomaly_score,
+      anomaly_status,
+      direction,
+      price_change_percent::text,
+      relative_volume::text,
+      reasons,
+      updated_at::text
+    from market_anomalies
+    where updated_at >= now() - interval '24 hours'
+      and anomaly_score >= 70
+      and direction = 'bullish'
+      and latest_close is not null
+    order by anomaly_score desc, updated_at desc
+    limit ${limit}
+  `;
+
+  let created = 0;
+  let updated = 0;
+  const errors: Array<{ ticker?: string; error: string }> = [];
+
+  for (const row of rows) {
+    const entryPrice = asNumber(row.latest_close);
+    if (!entryPrice || entryPrice <= 0) continue;
+    const accession = `market_anomaly:${row.ticker}`;
+    const currentPrice = await latestCloseForTicker(row.ticker) || entryPrice;
+    const pnlPercent = entryPrice > 0 ? round(((currentPrice - entryPrice) / entryPrice) * 100, 2) : 0;
+    const reason = `${row.ticker} market anomaly shadow: score ${row.anomaly_score}/100, move ${row.price_change_percent ?? '--'}%, rel vol ${row.relative_volume ?? '--'}x.`;
+
+    try {
+      const existing = await sql<Array<{ id: number }>>`
+        select id from paper_shadow_trades
+        where accession_number = ${accession}
+        limit 1
+      `;
+      if (existing[0]?.id) {
+        await sql`
+          update paper_shadow_trades set
+            current_price = ${currentPrice},
+            pnl_percent = ${pnlPercent},
+            last_checked_at = now(),
+            updated_at = now(),
+            raw_payload = raw_payload || ${JSON.stringify({ anomalyScore: row.anomaly_score, anomalyStatus: row.anomaly_status, priceChangePercent: row.price_change_percent, relativeVolume: row.relative_volume, reasons: row.reasons })}::jsonb
+          where id = ${existing[0].id}
+        `;
+        updated += 1;
+      } else {
+        await sql`
+          insert into paper_shadow_trades (
+            scored_signal_id,
+            accession_number,
+            ticker,
+            action,
+            direction,
+            final_score,
+            entry_price,
+            current_price,
+            pnl_percent,
+            status,
+            reason,
+            raw_payload,
+            entry_at,
+            last_checked_at
+          ) values (
+            null,
+            ${accession},
+            ${row.ticker},
+            'market_anomaly_shadow',
+            ${row.direction},
+            ${row.anomaly_score},
+            ${entryPrice},
+            ${currentPrice},
+            ${pnlPercent},
+            'active_shadow',
+            ${reason},
+            ${JSON.stringify({ source: 'market_anomaly', anomalyScore: row.anomaly_score, anomalyStatus: row.anomaly_status, priceChangePercent: row.price_change_percent, relativeVolume: row.relative_volume, reasons: row.reasons })}::jsonb,
+            ${row.updated_at},
+            now()
+          )
+        `;
+        created += 1;
+      }
+    } catch (error) {
+      errors.push({ ticker: row.ticker, error: error instanceof Error ? error.message : "Unknown market anomaly shadow failure" });
+    }
+  }
+
+  return { reviewed: rows.length, created, updated, errors };
 }
 
 export async function syncShadowTrades(limit = 25) {
@@ -225,6 +336,16 @@ export async function syncShadowTrades(limit = 25) {
     }
   }
 
+  const anomalyShadow = await syncMarketAnomalyShadowTrades().catch((error) => ({
+    reviewed: 0,
+    created: 0,
+    updated: 0,
+    errors: [{ error: error instanceof Error ? error.message : "Unknown market anomaly shadow sync failure" }]
+  }));
+  for (const error of anomalyShadow.errors) errors.push(error);
+  created += anomalyShadow.created;
+  updated += anomalyShadow.updated;
+
   const active = await sql<Array<{ count: number }>>`
     select count(*)::int as count
     from paper_shadow_trades
@@ -234,7 +355,7 @@ export async function syncShadowTrades(limit = 25) {
   return {
     ok: errors.length === 0,
     database: "configured" as const,
-    reviewed: rows.length,
+    reviewed: rows.length + anomalyShadow.reviewed,
     created,
     updated,
     active: active[0]?.count || 0,

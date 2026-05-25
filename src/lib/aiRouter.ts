@@ -41,27 +41,9 @@ function shouldRoute(row: RouteRow) {
   return row.event_quality_score >= 72;
 }
 
-export async function routeBestCandidatesToAi(limit = 1) {
-  const startedAt = new Date().toISOString();
-  if (!hasDatabase()) {
-    return { ok: false, phase: "AI_BUDGET_ROUTER", database: "not_configured" as const, pendingWatchlistFilings: 0, reviewed: 0, routed: 0, skipped: 0, reason: "database_not_configured", routedCandidates: [], errors: [{ error: "DATABASE_URL or STORAGE_URL is not configured." }] };
-  }
 
-  await ensureRavenTables();
-  const sql = db();
-
-  const pendingWatchlist = await sql<Array<{ count: number }>>`
-    select count(*)::integer as count
-    from raw_sec_filings r
-    left join sec_filing_summaries s on s.raw_filing_id = r.id
-    where s.id is null
-  `;
-  const pendingWatchlistFilings = Number(pendingWatchlist[0]?.count || 0);
-  if (pendingWatchlistFilings > 0) {
-    return { ok: true, phase: "AI_BUDGET_ROUTER", database: "configured" as const, pendingWatchlistFilings, reviewed: 0, routed: 0, skipped: 0, reason: "watchlist_sec_pending_first", routedCandidates: [], errors: [] };
-  }
-
-  const candidates = await sql<RouteRow[]>`
+async function getRoutableCandidates(sql: ReturnType<typeof db>) {
+  return sql<RouteRow[]>`
     select
       c.id as ranking_id,
       c.source,
@@ -99,12 +81,44 @@ export async function routeBestCandidatesToAi(limit = 1) {
       and s.id is null
       and c.tier in ('tier_1', 'tier_2')
     order by
-      case c.tier when 'tier_1' then 1 when 'tier_2' then 2 else 3 end asc,
+      case
+        when coalesce(m.anomaly_score, 0) >= 70 and m.direction = 'bullish' then 0
+        when c.tier = 'tier_1' then 1
+        when c.tier = 'tier_2' then 2
+        else 3
+      end asc,
       coalesce(m.anomaly_score, 0) desc,
       c.event_quality_score desc,
       c.updated_at desc
     limit 20
   `;
+}
+
+async function getPendingWatchlistCount(sql: ReturnType<typeof db>) {
+  const pendingWatchlist = await sql<Array<{ count: number }>>`
+    select count(*)::integer as count
+    from raw_sec_filings r
+    left join sec_filing_summaries s on s.raw_filing_id = r.id
+    where s.id is null
+  `;
+  return Number(pendingWatchlist[0]?.count || 0);
+}
+
+export async function routeBestCandidatesToAi(limit = 1) {
+  const startedAt = new Date().toISOString();
+  if (!hasDatabase()) {
+    return { ok: false, phase: "AI_BUDGET_ROUTER", database: "not_configured" as const, pendingWatchlistFilings: 0, reviewed: 0, routed: 0, skipped: 0, reason: "database_not_configured", routedCandidates: [], errors: [{ error: "DATABASE_URL or STORAGE_URL is not configured." }] };
+  }
+
+  await ensureRavenTables();
+  const sql = db();
+
+  const pendingWatchlistFilings = await getPendingWatchlistCount(sql);
+  if (pendingWatchlistFilings > 0) {
+    return { ok: true, phase: "AI_BUDGET_ROUTER", database: "configured" as const, pendingWatchlistFilings, reviewed: 0, routed: 0, skipped: 0, reason: "watchlist_sec_pending_first", routedCandidates: [], errors: [] };
+  }
+
+  const candidates = await getRoutableCandidates(sql);
 
   let routed = 0;
   let skipped = 0;
@@ -119,6 +133,7 @@ export async function routeBestCandidatesToAi(limit = 1) {
     }
     try {
       const priority = mapPriority(candidate.tier, candidate.event_quality_score);
+      const selectedAt = new Date().toISOString();
       const priorityScore = Math.max(candidate.priority_score || 0, candidate.event_quality_score + Math.min(10, Math.round((candidate.anomaly_score || 0) / 10)));
       await sql`
         insert into raw_sec_filings (
@@ -141,6 +156,9 @@ export async function routeBestCandidatesToAi(limit = 1) {
             ravenMateriality: candidate.materiality || 'possibly_material',
             ravenFormFamily: candidate.form_family || 'sec_discovery',
             ravenSource: 'ai_budget_router',
+            ravenRouterSelectedAt: selectedAt,
+            ravenRoutedTicker: candidate.ticker,
+            ravenRoutedAccessionNumber: candidate.accession_number,
             ravenCandidateTier: candidate.tier,
             ravenEventQualityScore: candidate.event_quality_score,
             ravenTradeBias: candidate.trade_bias,
@@ -150,7 +168,10 @@ export async function routeBestCandidatesToAi(limit = 1) {
             ravenMarketDirection: candidate.market_direction
           })}::jsonb
         )
-        on conflict (accession_number) do nothing
+        on conflict (accession_number) do update set
+          raw_payload = raw_sec_filings.raw_payload || excluded.raw_payload,
+          primary_document_url = excluded.primary_document_url,
+          source_url = excluded.source_url
       `;
       routed += 1;
       routedCandidates.push({ ticker: candidate.ticker, form: candidate.form, accessionNumber: candidate.accession_number, tier: candidate.tier, eventQualityScore: candidate.event_quality_score, marketAnomalyScore: candidate.anomaly_score, reason: candidate.ranking_reason });
@@ -176,22 +197,56 @@ export async function routeBestCandidatesToAi(limit = 1) {
 }
 
 export async function getAiRouterReport() {
-  const result = await routeBestCandidatesToAi(1);
+  if (!hasDatabase()) {
+    return [
+      "RAVEN AI BUDGET ROUTER",
+      "======================",
+      "Status: needs_attention",
+      "Mode: preview_only_no_queue_mutation",
+      "Database is not configured.",
+      "",
+      "COPY NOTE",
+      "---------",
+      "Paste this report into ChatGPT when tuning Groq routing."
+    ].join("\n") + "\n";
+  }
+
+  await ensureRavenTables();
+  const sql = db();
+  const pendingWatchlistFilings = await getPendingWatchlistCount(sql);
+  const candidates = pendingWatchlistFilings > 0 ? [] : await getRoutableCandidates(sql);
+  const eligibleCandidates = candidates.filter(shouldRoute);
+  const routedCandidates = eligibleCandidates.slice(0, 5).map((candidate) => ({
+    ticker: candidate.ticker,
+    form: candidate.form,
+    accessionNumber: candidate.accession_number,
+    tier: candidate.tier,
+    eventQualityScore: candidate.event_quality_score,
+    marketAnomalyScore: candidate.anomaly_score,
+    reason: candidate.ranking_reason
+  }));
+  const reason = pendingWatchlistFilings > 0
+    ? "watchlist_sec_pending_first"
+    : routedCandidates.length > 0
+      ? "would_route_ranked_discovery_candidate"
+      : "no_ranked_trade_candidate_survived_routing";
+
   const lines = [
     "RAVEN AI BUDGET ROUTER",
     "======================",
-    `Status: ${result.ok ? "ok" : "needs_attention"}`,
-    `Pending watchlist filings: ${result.pendingWatchlistFilings}`,
-    `Candidates reviewed: ${result.reviewed}`,
-    `Routed to AI queue: ${result.routed}`,
-    `Skipped: ${result.skipped}`,
-    `Reason: ${result.reason}`,
+    "Status: ok",
+    "Mode: preview only, report does not add anything to the AI queue",
+    `Pending watchlist filings: ${pendingWatchlistFilings}`,
+    `Candidates reviewed: ${candidates.length}`,
+    `Would route to AI queue: ${Math.min(1, routedCandidates.length)}`,
+    `Skipped: ${Math.max(0, candidates.length - eligibleCandidates.length)}`,
+    `Reason: ${reason}`,
     "",
-    "ROUTED CANDIDATES",
-    "-----------------"
+    "ROUTABLE CANDIDATES",
+    "-------------------"
   ];
-  if (!result.routedCandidates.length) lines.push("None");
-  for (const item of result.routedCandidates) {
+  if (!routedCandidates.length) lines.push("None");
+  for (const item of routedCandidates) {
     lines.push(`- ${item.ticker} | ${item.form} | ${item.tier} | event ${item.eventQualityScore}/100 | market ${item.marketAnomalyScore ?? "--"}/100 | ${item.reason}`);
   }
   lines.push("", "COPY NOTE", "---------", "Paste this report into ChatGPT when tuning Groq routing.");

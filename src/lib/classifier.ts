@@ -74,8 +74,25 @@ async function resolvePrimaryDocumentUrl(url: string) {
   return primary || url;
 }
 
-async function fetchFilingText(url: string | null): Promise<string> {
-  if (!url) return "No primary document URL was available.";
+type FilingTextResult = {
+  text: string;
+  resolvedUrl: string | null;
+  usable: boolean;
+  reason?: string;
+};
+
+function looksLikeUselessSecViewer(text: string) {
+  const lower = text.toLowerCase();
+  return lower.includes("xbrl viewer")
+    || lower.includes("inline xbrl viewer")
+    || lower.includes("javascript") && lower.includes("xbrl") && lower.length < 2500
+    || lower.includes("no meaningful information available")
+    || lower.includes("please enable javascript")
+    || lower.includes("document and entity information") && lower.length < 1200;
+}
+
+async function fetchFilingText(url: string | null): Promise<FilingTextResult> {
+  if (!url) return { text: "", resolvedUrl: null, usable: false, reason: "missing_primary_document_url" };
 
   const resolvedUrl = await resolvePrimaryDocumentUrl(url);
   const response = await fetch(resolvedUrl, {
@@ -87,8 +104,15 @@ async function fetchFilingText(url: string | null): Promise<string> {
     throw new Error(`SEC filing document fetch failed: ${response.status}`);
   }
 
-  const text = await response.text();
-  return stripFilingText(text).slice(0, 9000);
+  const raw = await response.text();
+  const stripped = stripFilingText(raw);
+  if (looksLikeUselessSecViewer(stripped)) {
+    return { text: stripped.slice(0, 1200), resolvedUrl, usable: false, reason: "sec_xbrl_or_viewer_text_unusable" };
+  }
+  if (stripped.length < 450 && !resolvedUrl.toLowerCase().endsWith(".xml")) {
+    return { text: stripped, resolvedUrl, usable: false, reason: "filing_text_too_short" };
+  }
+  return { text: stripped.slice(0, 9000), resolvedUrl, usable: true };
 }
 
 async function getPendingRawFilings(limit: number): Promise<RawSecFilingRow[]> {
@@ -124,6 +148,8 @@ async function getPendingRawFilings(limit: number): Promise<RawSecFilingRow[]> {
       on sec_filing_summaries.raw_filing_id = raw_sec_filings.id
     where sec_filing_summaries.id is null
     order by
+      case when raw_sec_filings.raw_payload->>'ravenSource' = 'ai_budget_router' then 0 else 1 end asc,
+      nullif(raw_sec_filings.raw_payload->>'ravenRouterSelectedAt', '')::timestamptz desc nulls last,
       coalesce(
         nullif(raw_sec_filings.raw_payload->>'ravenPriorityScore', '')::integer,
         case
@@ -189,6 +215,52 @@ async function saveClassification(row: RawSecFilingRow, result: Awaited<ReturnTy
   `;
 }
 
+
+async function saveExtractionFailure(row: RawSecFilingRow, reason: string, resolvedUrl: string | null, sampleText: string) {
+  const sql = db();
+  const summary = `Raven skipped AI classification because the SEC filing text was not usable (${reason}). This avoids wasting Groq tokens on SEC viewer/index/XBRL wrapper pages.`;
+  await sql`
+    insert into sec_filing_summaries (
+      raw_filing_id,
+      accession_number,
+      ticker,
+      form,
+      filing_date,
+      classifier_model,
+      direction,
+      category,
+      risk_level,
+      tradeability,
+      summary,
+      bull_case,
+      bear_case,
+      verdict,
+      confirmation_needed,
+      avoid_if,
+      raw_ai
+    ) values (
+      ${row.id},
+      ${row.accession_number},
+      ${row.ticker},
+      ${row.form},
+      ${row.filing_date},
+      'rule_extraction_guard',
+      'neutral',
+      'document_unavailable',
+      'high',
+      0,
+      ${summary},
+      'No bull case was generated because Raven could not extract usable filing text.',
+      'Bad or unavailable filing text means Raven cannot trust this candidate for autonomous trading.',
+      'ignore',
+      ${JSON.stringify(['usable SEC filing document text'])}::jsonb,
+      ${JSON.stringify(['SEC viewer/index/XBRL wrapper instead of filing text', 'short or empty filing text'])}::jsonb,
+      ${JSON.stringify({ extractionGuard: true, reason, resolvedUrl, sampleText: sampleText.slice(0, 500) })}::jsonb
+    )
+    on conflict (accession_number) do nothing
+  `;
+}
+
 export async function classifyPendingSecFilings(limit = 4) {
   if (!hasDatabase()) {
     return {
@@ -223,7 +295,28 @@ export async function classifyPendingSecFilings(limit = 4) {
 
   for (const row of pending) {
     try {
-      const filingText = await fetchFilingText(row.primary_document_url);
+      const filingTextResult = await fetchFilingText(row.primary_document_url);
+      if (!filingTextResult.usable) {
+        await saveExtractionFailure(row, filingTextResult.reason || "unusable_filing_text", filingTextResult.resolvedUrl, filingTextResult.text);
+        summaries.push({
+          ticker: row.ticker,
+          accessionNumber: row.accession_number,
+          form: row.form,
+          filingDate: row.filing_date,
+          priority: row.raven_priority || "low",
+          priorityScore: 0,
+          materiality: "not_material",
+          formFamily: row.raven_form_family || "extraction_guard",
+          direction: "neutral",
+          category: "document_unavailable",
+          risk_level: "high",
+          tradeability: 0,
+          summary: `Skipped AI classification: ${filingTextResult.reason || "unusable_filing_text"}.`,
+          verdict: "ignore"
+        });
+        continue;
+      }
+      const filingText = filingTextResult.text;
       const priority = analyzeFilingPriority({
         form: row.form,
         primaryDocument: row.primary_document,
