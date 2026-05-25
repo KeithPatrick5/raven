@@ -244,6 +244,37 @@ export async function ensureRavenTables() {
 
 
   await sql`
+    create table if not exists raw_fda_events (
+      id bigserial primary key,
+      source_id text not null,
+      endpoint text not null,
+      ticker text not null,
+      matched_term text not null,
+      category text not null,
+      event_date date,
+      title text not null,
+      summary text not null,
+      source_url text,
+      raw_payload jsonb not null default '{}'::jsonb,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now(),
+      unique(source_id, ticker, matched_term)
+    )
+  `;
+
+  await sql`
+    create index if not exists raw_fda_events_ticker_date_idx
+    on raw_fda_events (ticker, event_date desc)
+  `;
+
+  await sql`
+    create index if not exists raw_fda_events_category_date_idx
+    on raw_fda_events (category, event_date desc)
+  `;
+
+
+
+  await sql`
     create table if not exists telegram_alerts (
       id bigserial primary key,
       scored_signal_id bigint references scored_signals(id) on delete cascade,
