@@ -1,6 +1,7 @@
 import { db, ensureRavenTables, hasDatabase } from "@/lib/db";
 import { submitAlpacaPaperMarketOrder } from "@/lib/alpacaTrading";
 import { getPaperTradePlan, type PaperTradePlan } from "@/lib/paperPlanner";
+import { getTradingSafetyStatus, isPaperExecutionAllowedBySafety } from "@/lib/tradingSafety";
 
 type ExecutionMode = "preview_only" | "execution_disabled" | "paper_execution_enabled";
 
@@ -34,7 +35,8 @@ function paperTradingEnabled() {
 }
 
 function liveTradingEnabled() {
-  return (process.env.RAVEN_LIVE_TRADING_ENABLED || "false").toLowerCase() === "true";
+  const safety = getTradingSafetyStatus();
+  return safety.mode === "live" || safety.liveExecutionEnabled || safety.liveOrderSubmission !== "disabled";
 }
 
 function clientOrderId(plan: PaperTradePlan) {
@@ -110,6 +112,11 @@ export async function runPaperOrderExecution(options: { submit: boolean }): Prom
   const startedAt = new Date().toISOString();
   const enabled = paperTradingEnabled();
   const messages: string[] = [];
+  const safety = getTradingSafetyStatus();
+
+  if (safety.warnings.length) {
+    messages.push(...safety.warnings);
+  }
 
   if (liveTradingEnabled()) {
     return {
@@ -127,8 +134,8 @@ export async function runPaperOrderExecution(options: { submit: boolean }): Prom
       selectedPlan: null,
       submittedOrder: null,
       duplicate: false,
-      messages: ["Blocked because RAVEN_LIVE_TRADING_ENABLED is true. 13C is paper-only."],
-      errors: [{ error: "Live trading flag must stay disabled for 13C." }]
+      messages: ["Blocked because live mode/switch is active. Paper execution cannot run while live mode is requested.", ...safety.blocks],
+      errors: [{ error: "Live trading must remain disabled for paper execution." }]
     };
   }
 
@@ -176,6 +183,29 @@ export async function runPaperOrderExecution(options: { submit: boolean }): Prom
       liveTrading: "disabled",
       paperTradingEnabled: enabled,
       orderSubmission: "preview_only",
+      account: planResult.account,
+      candidatesReviewed: planResult.candidatesReviewed,
+      eligible: planResult.eligible,
+      selectedPlan,
+      submittedOrder: null,
+      duplicate: false,
+      messages,
+      errors: planResult.errors
+    };
+  }
+
+  if (!isPaperExecutionAllowedBySafety()) {
+    messages.push(...safety.blocks);
+    if (safety.killSwitch) messages.push("Kill switch is on. No paper orders can be submitted.");
+    return {
+      ok: planResult.ok && safety.blocks.length === 0,
+      phase: "PAPER_ORDER_EXECUTION_SWITCH",
+      mode: "execution_disabled",
+      startedAt,
+      finishedAt: new Date().toISOString(),
+      liveTrading: "disabled",
+      paperTradingEnabled: enabled,
+      orderSubmission: "blocked",
       account: planResult.account,
       candidatesReviewed: planResult.candidatesReviewed,
       eligible: planResult.eligible,

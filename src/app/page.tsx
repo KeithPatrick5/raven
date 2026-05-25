@@ -3,6 +3,7 @@ import { getLatestPaperDecisions, getLatestPaperTrades } from "@/lib/paper";
 import { getPaperTradePlan } from "@/lib/paperPlanner";
 import { runPaperOrderExecution } from "@/lib/paperExecution";
 import { getPaperPositionLifecycle } from "@/lib/paperLifecycle";
+import { getTradingSafetyStatus, type TradingSafetyStatus } from "@/lib/tradingSafety";
 import { getLatestPipelineRuns } from "@/lib/pipelineRuns";
 import { getActiveRadarTickers } from "@/lib/radar";
 import { getLatestScoredSignals } from "@/lib/scoring";
@@ -202,6 +203,14 @@ async function safePaperLifecycle() {
   }
 }
 
+async function safeTradingSafety(): Promise<TradingSafetyStatus | null> {
+  try {
+    return getTradingSafetyStatus();
+  } catch {
+    return null;
+  }
+}
+
 async function safePipelineRuns() {
   try {
     return await getLatestPipelineRuns(6);
@@ -219,11 +228,12 @@ async function safeRadarTickers() {
 }
 
 export default async function Home() {
-  const [paperAccount, paperPlan, paperExecution, paperLifecycle, signals, signalEvents, sourceHealth, paperTrades, paperDecisions, pipelineRuns, radarTickers] = await Promise.all([
+  const [paperAccount, paperPlan, paperExecution, paperLifecycle, tradingSafety, signals, signalEvents, sourceHealth, paperTrades, paperDecisions, pipelineRuns, radarTickers] = await Promise.all([
     safeAlpacaPaperAccount(),
     safePaperPlan(),
     safePaperExecution(),
     safePaperLifecycle(),
+    safeTradingSafety(),
     safeSignals(),
     safeSignalEvents(),
     safeSourceHealth(),
@@ -257,6 +267,7 @@ export default async function Home() {
         <nav className="nav" aria-label="Raven navigation">
           <a className="nav-item active" href="#overview">Overview <span className="nav-pill">live</span></a>
           <a className="nav-item" href="#account">Paper account <span className="nav-pill">read</span></a>
+          <a className="nav-item" href="#safety">Safety <span className="nav-pill">{tradingSafety?.mode || "paper"}</span></a>
           <a className="nav-item" href="#plan">Trade plan <span className="nav-pill">{paperPlan?.eligible || 0}</span></a>
           <a className="nav-item" href="#lifecycle">Lifecycle <span className="nav-pill">{paperLifecycle?.pendingExits || paperLifecycle?.openPositions || 0}</span></a>
           <a className="nav-item" href="#trades">Trades <span className="nav-pill">{openTrades.length}</span></a>
@@ -365,6 +376,40 @@ export default async function Home() {
                 </>
               ) : (
                 <div className="empty-state">Alpaca paper account unavailable.</div>
+              )}
+            </section>
+
+            <section className="panel" id="safety" style={{ marginTop: 14 }}>
+              <div className="panel-header">
+                <div>
+                  <div className="panel-title">Trading safety switch</div>
+                  <div className="panel-meta">13F. Live mode guardrails. Real-money order submission is disabled by default.</div>
+                </div>
+                {tradingSafety ? <span className={`badge ${tradingSafety.safetyStatus === "paper_execution_enabled" ? "green" : tradingSafety.safetyStatus === "safe_paper_mode" ? "blue" : "amber"}`}>{cleanLabel(tradingSafety.safetyStatus)}</span> : <span className="badge amber">offline</span>}
+              </div>
+              {tradingSafety ? (
+                <>
+                  <div className="run-summary run-summary-tight">
+                    <div><span>Mode</span><strong>{tradingSafety.mode}</strong></div>
+                    <div><span>Paper orders</span><strong className={tradingSafety.paperOrderSubmission === "enabled" ? "text-green" : "text-amber"}>{tradingSafety.paperOrderSubmission}</strong></div>
+                    <div><span>Live orders</span><strong className="text-red">{tradingSafety.liveOrderSubmission}</strong></div>
+                    <div><span>Kill switch</span><strong className={tradingSafety.killSwitch ? "text-red" : "text-green"}>{tradingSafety.killSwitch ? "on" : "off"}</strong></div>
+                    <div><span>Paper keys</span><strong>{tradingSafety.paperKeysConfigured ? "ready" : "missing"}</strong></div>
+                    <div><span>Live keys</span><strong>{tradingSafety.liveKeysConfigured ? "present" : "not used"}</strong></div>
+                  </div>
+                  <div className="empty-state">Current target: {tradingSafety.currentExecutionTarget}. Live trading requires separate keys, explicit live mode, explicit enable flag, and confirmation phrase later. It is not armed now.</div>
+                  {tradingSafety.blocks.length > 0 ? (
+                    <div className="market-strip" style={{ padding: "0 13px 12px" }}>
+                      {tradingSafety.blocks.slice(0, 4).map((block) => <span key={block}>{block}</span>)}
+                    </div>
+                  ) : null}
+                  <div className="market-strip" style={{ padding: "0 13px 12px" }}>
+                    <a className="badge blue" href="/api/trading/safety">Safety JSON</a>
+                    <a className="badge blue" href="/api/trading/safety/report">Safety report</a>
+                  </div>
+                </>
+              ) : (
+                <div className="empty-state">Trading safety status unavailable.</div>
               )}
             </section>
 

@@ -109,7 +109,7 @@ export function hasAlpacaTradingProvider() {
 }
 
 export function alpacaTradingBaseUrl() {
-  return (process.env.ALPACA_PAPER_BASE_URL || process.env.ALPACA_TRADING_BASE_URL || "https://paper-api.alpaca.markets").replace(/\/$/, "");
+  return (process.env.ALPACA_PAPER_BASE_URL || "https://paper-api.alpaca.markets").replace(/\/$/, "");
 }
 
 function toNumber(value: unknown): number | null {
