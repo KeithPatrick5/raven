@@ -336,6 +336,11 @@ export async function getPaperExecutionTextReport() {
   lines.push(`Open positions: ${result.account.openPositionCount}`);
   lines.push(`Open orders: ${result.account.openOrderCount}`);
   lines.push("");
+  lines.push("RISK LIMITS");
+  lines.push("-----------");
+  lines.push("Sizing uses cash/equity only. Alpaca buying power is ignored.");
+  lines.push("Execution remains blocked by score, market, liquidity, duplicate, daily trade, kill switch, and live-trading gates.");
+  lines.push("");
   lines.push("EXECUTION READ");
   lines.push("--------------");
   if (!result.paperTradingEnabled) {

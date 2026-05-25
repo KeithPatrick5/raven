@@ -374,6 +374,8 @@ export default async function Home() {
                     <div><span>Rejected</span><strong>{paperPlan.rejected}</strong></div>
                     <div><span>Max size</span><strong>{money(paperPlan.riskLimits.maxNotionalPerTrade)}</strong></div>
                     <div><span>Per trade</span><strong>{paperPlan.riskLimits.maxPositionPct}% equity</strong></div>
+                    <div><span>Risk status</span><strong className={paperPlan.riskState.riskStatus === "ok" ? "text-green" : "text-red"}>{paperPlan.riskState.riskStatus}</strong></div>
+                    <div><span>Daily trades</span><strong>{paperPlan.riskState.dailyTradesUsed}/{paperPlan.riskLimits.maxDailyTrades}</strong></div>
                   </div>
                   {paperPlan.plans.length > 0 ? (
                     <div className="signal-list">
@@ -406,6 +408,7 @@ export default async function Home() {
                   <div className="market-strip" style={{ padding: "0 13px 12px" }}>
                     <a className="badge blue" href="/api/paper/plan">Plan JSON</a>
                     <a className="badge blue" href="/api/paper/plan/report">Plan report</a>
+                    <a className="badge blue" href="/api/paper/risk/report">Risk report</a>
                   </div>
                 </>
               ) : (
@@ -417,7 +420,7 @@ export default async function Home() {
               <div className="panel-header">
                 <div>
                   <div className="panel-title">Paper execution switch</div>
-                  <div className="panel-meta">13C. Disabled by default. POST only when explicitly enabled.</div>
+                  <div className="panel-meta">13D. Risk-gated. Disabled by default. POST only when explicitly enabled.</div>
                 </div>
                 {paperExecution ? <span className={`badge ${paperExecution.paperTradingEnabled ? "green" : "amber"}`}>{paperExecution.paperTradingEnabled ? "enabled" : "disabled"}</span> : <span className="badge amber">offline</span>}
               </div>

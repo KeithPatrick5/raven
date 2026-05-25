@@ -82,6 +82,9 @@ export type PaperAccountSnapshot = {
     cash: number | null;
     buyingPower: number | null;
     portfolioValue: number | null;
+    lastEquity: number | null;
+    dayPl: number | null;
+    dayPlPct: number | null;
     longMarketValue: number | null;
     openPositionCount: number;
     openOrderCount: number;
@@ -192,6 +195,9 @@ export async function submitAlpacaPaperMarketOrder(request: AlpacaPaperMarketOrd
 
 function summarize(account: AlpacaPaperAccount | null, positions: AlpacaPaperPosition[], orders: AlpacaPaperOrder[]) {
   const equity = round(toNumber(account?.equity ?? account?.portfolio_value));
+  const lastEquity = round(toNumber(account?.last_equity));
+  const dayPl = equity !== null && lastEquity !== null ? round(equity - lastEquity) : null;
+  const dayPlPct = dayPl !== null && lastEquity !== null && lastEquity > 0 ? round((dayPl / lastEquity) * 100, 2) : null;
   const longMarketValue = round(toNumber(account?.long_market_value));
   const unrealizedPl = round(positions.reduce((sum, position) => sum + (toNumber(position.unrealized_pl) || 0), 0));
   const openOrders = orders.filter((order) => ["new", "accepted", "pending_new", "partially_filled"].includes(order.status));
@@ -202,6 +208,9 @@ function summarize(account: AlpacaPaperAccount | null, positions: AlpacaPaperPos
     cash: round(toNumber(account?.cash)),
     buyingPower: round(toNumber(account?.buying_power)),
     portfolioValue: round(toNumber(account?.portfolio_value)),
+    lastEquity,
+    dayPl,
+    dayPlPct,
     longMarketValue,
     openPositionCount: positions.length,
     openOrderCount: openOrders.length,

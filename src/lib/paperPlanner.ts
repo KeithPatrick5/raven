@@ -24,6 +24,33 @@ export type PaperPlanCandidate = {
   created_at: string;
 };
 
+export type PaperRiskLimits = {
+  minScore: number;
+  maxPositionPct: number;
+  maxNotionalPerTrade: number;
+  maxOpenPositions: number;
+  maxDailyTrades: number;
+  maxDailyLossPct: number;
+  stopLossPct: number;
+  takeProfitPct: number;
+  maxHoldDays: number;
+  killSwitch: boolean;
+  sizingBasis: "cash_equity_only";
+};
+
+export type PaperRiskState = {
+  dailyTradesUsed: number;
+  dailyTradesRemaining: number;
+  dayPl: number | null;
+  dayPlPct: number | null;
+  dailyLossLimitHit: boolean;
+  openExposure: number;
+  openExposurePct: number | null;
+  cashAvailableForNewTrades: number | null;
+  riskStatus: "ok" | "blocked";
+  blocks: string[];
+};
+
 export type PaperTradePlan = {
   scoredSignalId: number;
   ticker: string;
@@ -55,6 +82,7 @@ const DEFAULT_MAX_NOTIONAL = 1000;
 const DEFAULT_POSITION_PCT = 1;
 const DEFAULT_MAX_OPEN_POSITIONS = 3;
 const DEFAULT_MAX_DAILY_TRADES = 3;
+const DEFAULT_MAX_DAILY_LOSS_PCT = 2;
 const DEFAULT_MIN_SCORE = 70;
 const DEFAULT_STOP_LOSS_PCT = 4;
 const DEFAULT_TAKE_PROFIT_PCT = 8;
@@ -71,6 +99,12 @@ function envNumber(name: string, fallback: number) {
   if (!raw) return fallback;
   const parsed = Number(raw);
   return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function envBool(name: string, fallback = false) {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  return ["1", "true", "yes", "on"].includes(raw.toLowerCase());
 }
 
 function round(value: number | null, decimals = 2) {
@@ -99,6 +133,22 @@ function activeSymbols(positions: AlpacaPaperPosition[], orders: AlpacaPaperOrde
   for (const position of positions) symbols.add(position.symbol.toUpperCase());
   for (const order of orders.filter(isOpenOrder)) symbols.add(order.symbol.toUpperCase());
   return symbols;
+}
+
+function riskLimits(): PaperRiskLimits {
+  return {
+    minScore: envNumber("RAVEN_MIN_SCORE_TO_TRADE", DEFAULT_MIN_SCORE),
+    maxPositionPct: envNumber("RAVEN_MAX_POSITION_PCT", DEFAULT_POSITION_PCT),
+    maxNotionalPerTrade: envNumber("RAVEN_MAX_NOTIONAL_PER_TRADE", DEFAULT_MAX_NOTIONAL),
+    maxOpenPositions: envNumber("RAVEN_MAX_OPEN_POSITIONS", DEFAULT_MAX_OPEN_POSITIONS),
+    maxDailyTrades: envNumber("RAVEN_MAX_DAILY_TRADES", DEFAULT_MAX_DAILY_TRADES),
+    maxDailyLossPct: envNumber("RAVEN_MAX_DAILY_LOSS_PCT", DEFAULT_MAX_DAILY_LOSS_PCT),
+    stopLossPct: envNumber("RAVEN_STOP_LOSS_PCT", DEFAULT_STOP_LOSS_PCT),
+    takeProfitPct: envNumber("RAVEN_TAKE_PROFIT_PCT", DEFAULT_TAKE_PROFIT_PCT),
+    maxHoldDays: envNumber("RAVEN_MAX_HOLD_DAYS", DEFAULT_MAX_HOLD_DAYS),
+    killSwitch: envBool("RAVEN_KILL_SWITCH", false),
+    sizingBasis: "cash_equity_only"
+  };
 }
 
 function isActionTradeEligible(action: string) {
@@ -157,21 +207,64 @@ async function getPlanCandidates(limit: number): Promise<PaperPlanCandidate[]> {
   `;
 }
 
+async function getDailyPaperTradeCount() {
+  if (!hasDatabase()) return 0;
+  const sql = db();
+  const rows = await sql<{ count: string }[]>`
+    select count(*)::text as count
+    from paper_order_submissions
+    where created_at >= date_trunc('day', now())
+      and status in ('submitted', 'filled', 'accepted', 'open')
+  `;
+  return Number(rows[0]?.count || 0);
+}
+
+function buildRiskState(args: {
+  limits: PaperRiskLimits;
+  equity: number | null;
+  cash: number | null;
+  lastEquity: number | null;
+  openPositionCount: number;
+  openOrderCount: number;
+  dailyTradesUsed: number;
+  positions: AlpacaPaperPosition[];
+}): PaperRiskState {
+  const blocks: string[] = [];
+  const openExposure = round(args.positions.reduce((sum, position) => sum + (asNumber(position.market_value) || 0), 0), 2) || 0;
+  const dayPl = args.equity !== null && args.lastEquity !== null ? round(args.equity - args.lastEquity, 2) : null;
+  const dayPlPct = dayPl !== null && args.lastEquity !== null && args.lastEquity > 0 ? round((dayPl / args.lastEquity) * 100, 2) : null;
+  const dailyLossLimitHit = dayPlPct !== null && dayPlPct <= -Math.abs(args.limits.maxDailyLossPct);
+  const dailyTradesRemaining = Math.max(0, args.limits.maxDailyTrades - args.dailyTradesUsed);
+
+  if (args.limits.killSwitch) blocks.push("kill_switch_on");
+  if (args.dailyTradesUsed >= args.limits.maxDailyTrades) blocks.push("max_daily_trades_reached");
+  if (dailyLossLimitHit) blocks.push("max_daily_loss_reached");
+  if (args.openPositionCount + args.openOrderCount >= args.limits.maxOpenPositions) blocks.push("max_open_positions_reached");
+  if (args.cash === null || args.cash <= 0) blocks.push("no_cash_available");
+
+  return {
+    dailyTradesUsed: args.dailyTradesUsed,
+    dailyTradesRemaining,
+    dayPl,
+    dayPlPct,
+    dailyLossLimitHit,
+    openExposure,
+    openExposurePct: args.equity && args.equity > 0 ? round((openExposure / args.equity) * 100, 2) : null,
+    cashAvailableForNewTrades: args.cash,
+    riskStatus: blocks.length ? "blocked" : "ok",
+    blocks
+  };
+}
+
 function planCandidate(
   row: PaperPlanCandidate,
   account: { equity: number | null; cash: number | null; buyingPower: number | null },
   active: Set<string>,
   openPositionCount: number,
-  openOrderCount: number
+  openOrderCount: number,
+  limits: PaperRiskLimits,
+  riskState: PaperRiskState
 ): PaperTradePlan {
-  const minScore = envNumber("RAVEN_MIN_SCORE_TO_TRADE", DEFAULT_MIN_SCORE);
-  const maxNotional = envNumber("RAVEN_MAX_NOTIONAL_PER_TRADE", DEFAULT_MAX_NOTIONAL);
-  const positionPct = envNumber("RAVEN_MAX_POSITION_PCT", DEFAULT_POSITION_PCT);
-  const maxOpenPositions = envNumber("RAVEN_MAX_OPEN_POSITIONS", DEFAULT_MAX_OPEN_POSITIONS);
-  const maxDailyTrades = envNumber("RAVEN_MAX_DAILY_TRADES", DEFAULT_MAX_DAILY_TRADES);
-  const stopPct = envNumber("RAVEN_STOP_LOSS_PCT", DEFAULT_STOP_LOSS_PCT);
-  const targetPct = envNumber("RAVEN_TAKE_PROFIT_PCT", DEFAULT_TAKE_PROFIT_PCT);
-  const maxHoldDays = envNumber("RAVEN_MAX_HOLD_DAYS", DEFAULT_MAX_HOLD_DAYS);
   const latestPrice = asNumber(row.latest_close);
   const equity = account.equity;
   const cash = account.cash;
@@ -184,7 +277,10 @@ function planCandidate(
   reasons.push(`Market confirmation ${row.market_confirmation}.`);
   if (row.liquidity_status) reasons.push(`Liquidity ${row.liquidity_status}.`);
 
-  if (row.final_score < minScore) rejectCodes.push("score_below_minimum");
+  if (limits.killSwitch) rejectCodes.push("kill_switch_on");
+  if (riskState.dailyTradesUsed >= limits.maxDailyTrades) rejectCodes.push("max_daily_trades_reached");
+  if (riskState.dailyLossLimitHit) rejectCodes.push("max_daily_loss_reached");
+  if (row.final_score < limits.minScore) rejectCodes.push("score_below_minimum");
   if (!isActionTradeEligible(row.action)) rejectCodes.push("action_not_trade_eligible");
   if (isDangerAction(row.action)) rejectCodes.push("risk_action_not_long_trade");
   if (!isLongEligibleDirection(row.direction)) rejectCodes.push("long_only_rejects_non_bullish_signal");
@@ -194,20 +290,20 @@ function planCandidate(
   if (equity === null || equity <= 0) rejectCodes.push("missing_account_equity");
   if (cash === null || cash <= 0) rejectCodes.push("missing_cash");
   if (active.has(row.ticker.toUpperCase())) rejectCodes.push("already_has_position_or_open_order");
-  if (openPositionCount + openOrderCount >= maxOpenPositions) rejectCodes.push("max_open_positions_reached");
-  if (maxDailyTrades <= 0) rejectCodes.push("daily_trade_limit_zero");
+  if (openPositionCount + openOrderCount >= limits.maxOpenPositions) rejectCodes.push("max_open_positions_reached");
+  if (limits.maxDailyTrades <= 0) rejectCodes.push("daily_trade_limit_zero");
 
-  const notionalFromEquity = equity === null ? null : equity * (positionPct / 100);
+  const notionalFromEquity = equity === null ? null : equity * (limits.maxPositionPct / 100);
   const affordable = cash === null ? null : cash;
   const suggestedNotional = notionalFromEquity === null || affordable === null
     ? null
-    : round(Math.min(notionalFromEquity, maxNotional, affordable), 2);
+    : round(Math.min(notionalFromEquity, limits.maxNotionalPerTrade, affordable), 2);
 
   if (suggestedNotional === null || suggestedNotional <= 0) rejectCodes.push("missing_trade_size");
 
   const estimatedShares = latestPrice !== null && suggestedNotional !== null ? round(suggestedNotional / latestPrice, 4) : null;
-  const stopPrice = latestPrice !== null ? round(latestPrice * (1 - stopPct / 100), 2) : null;
-  const targetPrice = latestPrice !== null ? round(latestPrice * (1 + targetPct / 100), 2) : null;
+  const stopPrice = latestPrice !== null ? round(latestPrice * (1 - limits.stopLossPct / 100), 2) : null;
+  const targetPrice = latestPrice !== null ? round(latestPrice * (1 + limits.takeProfitPct / 100), 2) : null;
   const risks = parseList(row.risk_flags);
 
   return {
@@ -226,13 +322,27 @@ function planCandidate(
     estimatedShares,
     stopPrice,
     targetPrice,
-    maxHoldDays,
+    maxHoldDays: limits.maxHoldDays,
     rejectCodes,
     reasons,
     risks,
     account
   };
 }
+
+const fallbackRiskLimits = riskLimits();
+const fallbackRiskState: PaperRiskState = {
+  dailyTradesUsed: 0,
+  dailyTradesRemaining: fallbackRiskLimits.maxDailyTrades,
+  dayPl: null,
+  dayPlPct: null,
+  dailyLossLimitHit: false,
+  openExposure: 0,
+  openExposurePct: null,
+  cashAvailableForNewTrades: null,
+  riskStatus: fallbackRiskLimits.killSwitch ? "blocked" : "ok",
+  blocks: fallbackRiskLimits.killSwitch ? ["kill_switch_on"] : []
+};
 
 export async function getPaperTradePlan(limit = 10) {
   const startedAt = new Date().toISOString();
@@ -251,34 +361,46 @@ export async function getPaperTradePlan(limit = 10) {
       eligible: 0,
       rejected: 0,
       account: { equity: null, cash: null, buyingPower: null, openPositionCount: 0, openOrderCount: 0 },
-      riskLimits: {
-        minScore: DEFAULT_MIN_SCORE,
-        maxPositionPct: DEFAULT_POSITION_PCT,
-        maxNotionalPerTrade: DEFAULT_MAX_NOTIONAL,
-        maxOpenPositions: DEFAULT_MAX_OPEN_POSITIONS,
-        maxDailyTrades: DEFAULT_MAX_DAILY_TRADES,
-        stopLossPct: DEFAULT_STOP_LOSS_PCT,
-        takeProfitPct: DEFAULT_TAKE_PROFIT_PCT,
-        maxHoldDays: DEFAULT_MAX_HOLD_DAYS
-      },
+      riskLimits: fallbackRiskLimits,
+      riskState: fallbackRiskState,
       plans: [] as PaperTradePlan[],
       errors: [{ error: "DATABASE_URL or STORAGE_URL is not configured." }]
     };
   }
 
   await ensureRavenTables();
-  const [snapshot, candidates] = await Promise.all([
+  const [snapshot, candidates, dailyTradesUsed] = await Promise.all([
     getAlpacaPaperSnapshot(25),
-    getPlanCandidates(limit)
+    getPlanCandidates(limit),
+    getDailyPaperTradeCount()
   ]);
 
+  const limits = riskLimits();
   const account = {
     equity: snapshot.summary.equity,
     cash: snapshot.summary.cash,
     buyingPower: snapshot.summary.buyingPower
   };
   const active = activeSymbols(snapshot.positions, snapshot.orders);
-  const plans = candidates.map((candidate) => planCandidate(candidate, account, active, snapshot.summary.openPositionCount, snapshot.summary.openOrderCount));
+  const riskState = buildRiskState({
+    limits,
+    equity: snapshot.summary.equity,
+    cash: snapshot.summary.cash,
+    lastEquity: snapshot.summary.lastEquity,
+    openPositionCount: snapshot.summary.openPositionCount,
+    openOrderCount: snapshot.summary.openOrderCount,
+    dailyTradesUsed,
+    positions: snapshot.positions
+  });
+  const plans = candidates.map((candidate) => planCandidate(
+    candidate,
+    account,
+    active,
+    snapshot.summary.openPositionCount,
+    snapshot.summary.openOrderCount,
+    limits,
+    riskState
+  ));
 
   return {
     ok: snapshot.ok,
@@ -297,16 +419,8 @@ export async function getPaperTradePlan(limit = 10) {
       openPositionCount: snapshot.summary.openPositionCount,
       openOrderCount: snapshot.summary.openOrderCount
     },
-    riskLimits: {
-      minScore: envNumber("RAVEN_MIN_SCORE_TO_TRADE", DEFAULT_MIN_SCORE),
-      maxPositionPct: envNumber("RAVEN_MAX_POSITION_PCT", DEFAULT_POSITION_PCT),
-      maxNotionalPerTrade: envNumber("RAVEN_MAX_NOTIONAL_PER_TRADE", DEFAULT_MAX_NOTIONAL),
-      maxOpenPositions: envNumber("RAVEN_MAX_OPEN_POSITIONS", DEFAULT_MAX_OPEN_POSITIONS),
-      maxDailyTrades: envNumber("RAVEN_MAX_DAILY_TRADES", DEFAULT_MAX_DAILY_TRADES),
-      stopLossPct: envNumber("RAVEN_STOP_LOSS_PCT", DEFAULT_STOP_LOSS_PCT),
-      takeProfitPct: envNumber("RAVEN_TAKE_PROFIT_PCT", DEFAULT_TAKE_PROFIT_PCT),
-      maxHoldDays: envNumber("RAVEN_MAX_HOLD_DAYS", DEFAULT_MAX_HOLD_DAYS)
-    },
+    riskLimits: limits,
+    riskState,
     candidatesReviewed: plans.length,
     eligible: plans.filter((plan) => plan.wouldTrade).length,
     rejected: plans.filter((plan) => !plan.wouldTrade).length,
@@ -340,15 +454,17 @@ export async function getPaperTradePlanTextReport(limit = 8) {
   lines.push("-------");
   lines.push(`Equity: ${money(result.account.equity)}`);
   lines.push(`Cash: ${money(result.account.cash)}`);
-  lines.push(`Buying power: ${money(result.account.buyingPower)}`);
+  lines.push(`Buying power: ${money(result.account.buyingPower)} (not used for sizing)`);
   lines.push(`Open positions: ${result.account.openPositionCount}`);
   lines.push(`Open orders: ${result.account.openOrderCount}`);
   lines.push("");
   lines.push("PLANNER READ");
   lines.push("------------");
-  if (top) {
+  if (result.riskState.riskStatus === "blocked") {
+    lines.push(`New paper entries are globally blocked because ${result.riskState.blocks.map(clean).join(", ")}.`);
+  } else if (top) {
     lines.push(top.wouldTrade
-      ? `Top candidate ${top.ticker} is eligible for a future paper order, but 13B does not submit orders.`
+      ? `Top candidate ${top.ticker} is eligible for a future paper order, but this report does not submit orders.`
       : `Top candidate ${top.ticker} is rejected for now because ${top.rejectCodes.slice(0, 4).map(clean).join(", ")}.`);
   } else {
     lines.push("No scored candidates available for planning.");
@@ -356,10 +472,16 @@ export async function getPaperTradePlanTextReport(limit = 8) {
   lines.push("");
   lines.push("RISK LIMITS");
   lines.push("-----------");
+  lines.push(`Risk status: ${result.riskState.riskStatus}`);
+  lines.push(`Kill switch: ${result.riskLimits.killSwitch ? "on" : "off"}`);
+  lines.push(`Sizing basis: cash/equity only. Buying power is ignored.`);
   lines.push(`Min score: ${result.riskLimits.minScore}`);
   lines.push(`Max position: ${result.riskLimits.maxPositionPct}% of equity`);
   lines.push(`Max notional: ${money(result.riskLimits.maxNotionalPerTrade)}`);
   lines.push(`Max open positions: ${result.riskLimits.maxOpenPositions}`);
+  lines.push(`Daily trades: ${result.riskState.dailyTradesUsed}/${result.riskLimits.maxDailyTrades} used`);
+  lines.push(`Daily loss limit: ${result.riskLimits.maxDailyLossPct}% | today ${result.riskState.dayPlPct ?? "--"}%`);
+  lines.push(`Open exposure: ${money(result.riskState.openExposure)} (${result.riskState.openExposurePct ?? "--"}%)`);
   lines.push(`Stop / target: -${result.riskLimits.stopLossPct}% / +${result.riskLimits.takeProfitPct}%`);
   lines.push(`Max hold: ${result.riskLimits.maxHoldDays} days`);
   lines.push("");
@@ -373,7 +495,7 @@ export async function getPaperTradePlanTextReport(limit = 8) {
       if (plan.wouldTrade) {
         lines.push(`  Plan: buy about ${plan.estimatedShares ?? "--"} shares / ${money(plan.suggestedNotional)} | stop ${money(plan.stopPrice)} | target ${money(plan.targetPrice)} | max hold ${plan.maxHoldDays} days`);
       } else {
-        lines.push(`  Reject: ${plan.rejectCodes.slice(0, 5).map(clean).join(", ") || "none"}`);
+        lines.push(`  Reject: ${plan.rejectCodes.slice(0, 6).map(clean).join(", ") || "none"}`);
       }
     }
   }
@@ -382,5 +504,41 @@ export async function getPaperTradePlanTextReport(limit = 8) {
   lines.push("---------");
   lines.push("Paste this report into ChatGPT when you want Raven paper-planner help.");
 
+  return lines.join("\n");
+}
+
+export async function getPaperRiskTextReport() {
+  const result = await getPaperTradePlan(1);
+  const lines: string[] = [];
+  lines.push("RAVEN PAPER RISK LIMITS");
+  lines.push("=======================");
+  lines.push(`Status: ${result.ok ? "ok" : "needs_attention"}`);
+  lines.push(`Risk status: ${result.riskState.riskStatus}`);
+  lines.push("");
+  lines.push("ACCOUNT BASIS");
+  lines.push("-------------");
+  lines.push(`Equity: ${money(result.account.equity)}`);
+  lines.push(`Cash: ${money(result.account.cash)}`);
+  lines.push(`Buying power: ${money(result.account.buyingPower)} (ignored for sizing)`);
+  lines.push("");
+  lines.push("LIMITS");
+  lines.push("------");
+  lines.push(`Kill switch: ${result.riskLimits.killSwitch ? "on" : "off"}`);
+  lines.push(`Min score: ${result.riskLimits.minScore}`);
+  lines.push(`Max notional: ${money(result.riskLimits.maxNotionalPerTrade)}`);
+  lines.push(`Max position: ${result.riskLimits.maxPositionPct}% of equity`);
+  lines.push(`Max open positions: ${result.riskLimits.maxOpenPositions}`);
+  lines.push(`Max daily trades: ${result.riskLimits.maxDailyTrades}`);
+  lines.push(`Max daily loss: ${result.riskLimits.maxDailyLossPct}%`);
+  lines.push(`Stop / target: -${result.riskLimits.stopLossPct}% / +${result.riskLimits.takeProfitPct}%`);
+  lines.push(`Max hold: ${result.riskLimits.maxHoldDays} days`);
+  lines.push("");
+  lines.push("CURRENT USAGE");
+  lines.push("-------------");
+  lines.push(`Open exposure: ${money(result.riskState.openExposure)} (${result.riskState.openExposurePct ?? "--"}%)`);
+  lines.push(`Daily trades used: ${result.riskState.dailyTradesUsed}`);
+  lines.push(`Daily trades remaining: ${result.riskState.dailyTradesRemaining}`);
+  lines.push(`Today P/L: ${money(result.riskState.dayPl)} (${result.riskState.dayPlPct ?? "--"}%)`);
+  lines.push(`Blocks: ${result.riskState.blocks.length ? result.riskState.blocks.map(clean).join(", ") : "none"}`);
   return lines.join("\n");
 }
