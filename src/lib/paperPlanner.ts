@@ -22,6 +22,11 @@ export type PaperPlanCandidate = {
   liquidity_status: string | null;
   price_status: string | null;
   created_at: string;
+  candidate_tier: string | null;
+  event_quality_score: number | string | null;
+  market_anomaly_score: number | string | null;
+  market_anomaly_status: string | null;
+  market_anomaly_direction: string | null;
 };
 
 export type PaperRiskLimits = {
@@ -163,6 +168,13 @@ function isMarketConfirming(status: string) {
   return status.toLowerCase() === "confirmed";
 }
 
+function hasBucketMarketConfirmation(row: PaperPlanCandidate) {
+  const anomalyScore = asNumber(row.market_anomaly_score) || 0;
+  const anomalyDirection = (row.market_anomaly_direction || "").toLowerCase();
+  const eventQuality = asNumber(row.event_quality_score) || 0;
+  return eventQuality >= 80 && anomalyScore >= 55 && anomalyDirection === "bullish";
+}
+
 function isLiquidityAcceptable(status: string | null) {
   return ["liquid", "active"].includes((status || "").toLowerCase());
 }
@@ -198,10 +210,19 @@ async function getPlanCandidates(limit: number): Promise<PaperPlanCandidate[]> {
       c.relative_volume,
       c.liquidity_status,
       c.price_status,
-      s.created_at::text as created_at
+      s.created_at::text as created_at,
+      cr.tier as candidate_tier,
+      cr.event_quality_score,
+      ma.anomaly_score as market_anomaly_score,
+      ma.anomaly_status as market_anomaly_status,
+      ma.direction as market_anomaly_direction
     from scored_signals s
     left join alpaca_market_confirmations c
       on c.id = s.confirmation_id
+    left join candidate_rankings cr
+      on cr.source_event_id = s.accession_number
+    left join market_anomalies ma
+      on ma.ticker = s.ticker
     order by s.created_at desc, s.final_score desc
     limit ${limit}
   `;
@@ -276,15 +297,17 @@ function planCandidate(
   reasons.push(`Direction ${row.direction}.`);
   reasons.push(`Market confirmation ${row.market_confirmation}.`);
   if (row.liquidity_status) reasons.push(`Liquidity ${row.liquidity_status}.`);
+  if (row.candidate_tier) reasons.push(`Event quality ${row.candidate_tier} (${row.event_quality_score ?? "?"}/100).`);
+  if (row.market_anomaly_score !== null) reasons.push(`Market anomaly ${row.market_anomaly_score}/100 (${row.market_anomaly_status || "unknown"}).`);
 
   if (limits.killSwitch) rejectCodes.push("kill_switch_on");
   if (riskState.dailyTradesUsed >= limits.maxDailyTrades) rejectCodes.push("max_daily_trades_reached");
   if (riskState.dailyLossLimitHit) rejectCodes.push("max_daily_loss_reached");
   if (row.final_score < limits.minScore) rejectCodes.push("score_below_minimum");
   if (!isActionTradeEligible(row.action)) rejectCodes.push("action_not_trade_eligible");
-  if (isDangerAction(row.action)) rejectCodes.push("risk_action_not_long_trade");
+  if (isDangerAction(row.action) || (row.candidate_tier || "") === "risk_only") rejectCodes.push("risk_action_not_long_trade");
   if (!isLongEligibleDirection(row.direction)) rejectCodes.push("long_only_rejects_non_bullish_signal");
-  if (!isMarketConfirming(row.market_confirmation)) rejectCodes.push("market_not_confirmed");
+  if (!isMarketConfirming(row.market_confirmation) && !hasBucketMarketConfirmation(row)) rejectCodes.push("market_not_confirmed");
   if (!isLiquidityAcceptable(row.liquidity_status)) rejectCodes.push("liquidity_not_strong_enough");
   if (latestPrice === null || latestPrice <= 0) rejectCodes.push("missing_latest_price");
   if (equity === null || equity <= 0) rejectCodes.push("missing_account_equity");

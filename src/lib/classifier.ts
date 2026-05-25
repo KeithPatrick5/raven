@@ -33,14 +33,53 @@ function stripFilingText(input: string): string {
     .trim();
 }
 
+function secFetchHeaders() {
+  return {
+    "User-Agent": process.env.SEC_USER_AGENT?.trim() || "RavenPrivateScanner/0.3 contact@example.com",
+    Accept: "text/html,application/xml,text/plain,*/*"
+  };
+}
+
+function toAbsoluteSecUrl(href: string) {
+  try {
+    return new URL(href, "https://www.sec.gov").toString();
+  } catch {
+    return href;
+  }
+}
+
+function isLikelyPrimarySecDocument(href: string) {
+  const lower = href.toLowerCase();
+  return lower.includes("/archives/edgar/data/")
+    && /\.(htm|html|txt|xml)(\?|#|$)/i.test(lower)
+    && !lower.includes("-index")
+    && !lower.includes("xsl")
+    && !lower.includes("filingsummary")
+    && !lower.includes("indexheaders");
+}
+
+async function resolvePrimaryDocumentUrl(url: string) {
+  if (!url.toLowerCase().includes("-index.htm")) return url;
+
+  const response = await fetch(url, {
+    headers: secFetchHeaders(),
+    cache: "no-store"
+  });
+
+  if (!response.ok) return url;
+
+  const indexHtml = await response.text();
+  const hrefs = Array.from(indexHtml.matchAll(/href=["']([^"']+)["']/gi)).map((match) => toAbsoluteSecUrl(match[1]));
+  const primary = hrefs.find(isLikelyPrimarySecDocument);
+  return primary || url;
+}
+
 async function fetchFilingText(url: string | null): Promise<string> {
   if (!url) return "No primary document URL was available.";
 
-  const response = await fetch(url, {
-    headers: {
-      "User-Agent": process.env.SEC_USER_AGENT?.trim() || "RavenPrivateScanner/0.3 contact@example.com",
-      Accept: "text/html,application/xml,text/plain,*/*"
-    },
+  const resolvedUrl = await resolvePrimaryDocumentUrl(url);
+  const response = await fetch(resolvedUrl, {
+    headers: secFetchHeaders(),
     cache: "no-store"
   });
 

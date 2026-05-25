@@ -72,6 +72,25 @@ function sourceStepLine(run: PipelineLike, name: string, label: string) {
   const rawCount = num(data.rawArticleCount) || num(data.rawEventCount) || num(data.rawCandidateCount) || num(data.rawEntryCount) || num(data.rowCount);
   const suppressed = num(data.weakMatchesSuppressed);
 
+
+
+  if (name === "market_anomalies") {
+    const status = found.ok && data.ok !== false ? "ok" : "needs attention";
+    return `${label}: ${status} | ${seconds(found.durationMs)} | scanned ${num(data.scanned)} | saved ${num(data.saved)} | anomalies ${num(data.anomalyCount)}`;
+  }
+
+
+  if (name === "ai_budget_router") {
+    const status = found.ok && data.ok !== false ? "ok" : "needs attention";
+    return `${label}: ${status} | ${seconds(found.durationMs)} | reviewed ${num(data.reviewed)} | routed ${num(data.routed)} | reason ${String(data.reason || "unknown")}`;
+  }
+
+  if (name === "candidate_ranking") {
+    const status = found.ok && data.ok !== false ? "ok" : "needs attention";
+    const tiers = asObject(data.tiers);
+    return `${label}: ${status} | ${seconds(found.durationMs)} | reviewed ${num(data.reviewed)} | tier1 ${num(tiers.tier_1)} | tier2 ${num(tiers.tier_2)} | risk ${num(tiers.risk_only)}`;
+  }
+
   if (name === "paper_order_execution") {
     const status = found.ok && data.ok !== false ? "ok" : "needs attention";
     const orderSubmission = String(data.orderSubmission || "unknown");
@@ -224,7 +243,7 @@ export function buildPipelineTextReport(run: PipelineLike) {
   const review = result(run, "paper_trade_review");
   const paperExec = result(run, "paper_order_execution");
   const lifecycle = result(run, "paper_position_lifecycle");
-  const fallback = result(run, "sec_discovery_ai_fallback");
+  const fallback = result(run, "ai_budget_router");
   const paperRejects = asArray(paper.rejects);
   const paperTrades = asArray(paper.trades);
   const issues = reportIssues(run);
@@ -254,8 +273,8 @@ export function buildPipelineTextReport(run: PipelineLike) {
     "--------------",
     num(ai.classified) === 0 && num(sec.filingCount) > 0 && num(secStorage.saved) === 0
       ? (num(fallback.promoted) > 0
-        ? `Watchlist SEC had 0 new rows, so Raven promoted ${num(fallback.promoted)} SEC Discovery candidate(s) into the AI queue. AI still classified 0 if the candidate failed classification or was already summarized.`
-        : `AI classified 0 because watchlist SEC found 0 new rows and SEC Discovery fallback promoted 0 candidates. Fallback reason: ${String(fallback.reason || "not run")}.`)
+        ? `Watchlist SEC had 0 new rows, so Raven routed ${num(fallback.routed)} ranked candidate(s) into the AI queue. AI still classified 0 if the candidate failed classification or was already summarized.`
+        : `AI classified 0 because watchlist SEC found 0 new rows and the AI budget router routed 0 candidates. Router reason: ${String(fallback.reason || "not run")}.`)
       : "AI classification ran when a new pending SEC filing or promoted discovery candidate needed classification.",
     "Cron route is /api/run. Manual debug alias is /api/cron/run.",
     "",
@@ -279,7 +298,9 @@ export function buildPipelineTextReport(run: PipelineLike) {
     sourceStepLine(run, "congress", "Congress"),
     sourceStepLine(run, "news", "News"),
     sourceStepLine(run, "sec_discovery_radar", "SEC Discovery"),
-    sourceStepLine(run, "sec_discovery_ai_fallback", "SEC Discovery AI fallback"),
+    sourceStepLine(run, "market_anomalies", "Market Anomalies"),
+    sourceStepLine(run, "candidate_ranking", "Candidate Ranking"),
+    sourceStepLine(run, "ai_budget_router", "AI Budget Router"),
     sourceStepLine(run, "radar_sync", "Radar"),
     sourceStepLine(run, "paper_order_execution", "Paper Execution"),
     sourceStepLine(run, "shadow_trade_sync", "Shadow Trades"),

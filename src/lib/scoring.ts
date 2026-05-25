@@ -29,6 +29,13 @@ type PendingScoringRow = {
   raven_form_family: string | null;
   raven_is_routine_form4: boolean | null;
   source_url: string | null;
+  candidate_tier: string | null;
+  event_quality_score: number | null;
+  trade_bias: string | null;
+  ranking_reason: string | null;
+  market_anomaly_score: number | null;
+  market_anomaly_status: string | null;
+  market_anomaly_direction: string | null;
 };
 
 function clampScore(value: number) {
@@ -155,19 +162,58 @@ function priceImpact(direction: string, priceChangePercent: number | null) {
   return 0;
 }
 
+function eventQualityImpact(row: PendingScoringRow) {
+  const tier = (row.candidate_tier || "").toLowerCase();
+  const quality = asNumber(row.event_quality_score);
+  if (tier === "tier_1") return 18;
+  if (tier === "tier_2") return 8;
+  if (tier === "tier_3") return -4;
+  if (tier === "risk_only") return -24;
+  if (quality !== null) {
+    if (quality >= 85) return 14;
+    if (quality >= 65) return 6;
+    if (quality < 35) return -8;
+  }
+  return 0;
+}
+
+function marketAnomalyImpact(row: PendingScoringRow) {
+  const anomaly = asNumber(row.market_anomaly_score);
+  const marketDirection = (row.market_anomaly_direction || "").toLowerCase();
+  const signalDirection = row.direction.toLowerCase();
+  if (anomaly === null) return 0;
+  const alignedBull = signalDirection === "bullish" && marketDirection === "bullish";
+  const alignedBear = signalDirection === "bearish" && marketDirection === "bearish";
+  const conflicts = (signalDirection === "bullish" && marketDirection === "bearish") || (signalDirection === "bearish" && marketDirection === "bullish");
+  if (conflicts && anomaly >= 55) return -18;
+  if ((alignedBull || alignedBear) && anomaly >= 75) return 20;
+  if ((alignedBull || alignedBear) && anomaly >= 55) return 12;
+  if (anomaly >= 75) return 8;
+  if (anomaly >= 55) return 4;
+  return 0;
+}
+
 function verdictFromScore(score: number, row: PendingScoringRow) {
   const category = row.category.toLowerCase();
   const confirmation = (row.confirmation_status || "").toLowerCase();
+  const tier = (row.candidate_tier || "").toLowerCase();
+  const anomaly = asNumber(row.market_anomaly_score) || 0;
+  const marketDirection = (row.market_anomaly_direction || "").toLowerCase();
+  const bullishMarket = marketDirection === "bullish" && anomaly >= 55;
 
-  if (category.includes("dilution") || category.includes("offering") || category.includes("shelf")) {
+  if (category.includes("dilution") || category.includes("offering") || category.includes("shelf") || tier === "risk_only") {
     return score >= 55 ? "danger_watch" : "avoid";
   }
 
-  if (score >= 75 && confirmation === "confirmed") return "paper_trade_candidate";
-  if (score >= 60) return "high_watch";
+  const eventQualityPass = tier === "tier_1" || (asNumber(row.event_quality_score) || 0) >= 80;
+  const marketPass = confirmation === "confirmed" || bullishMarket;
+
+  if (score >= 70 && row.direction.toLowerCase() === "bullish" && eventQualityPass && marketPass) return "paper_trade_candidate";
+  if (score >= 62 && (eventQualityPass || marketPass)) return "high_watch";
   if (score >= 40) return "watch_only";
   return "ignore";
 }
+
 
 function reasonsFor(row: PendingScoringRow, score: number) {
   const reasons: string[] = [];
@@ -184,6 +230,8 @@ function reasonsFor(row: PendingScoringRow, score: number) {
   if (relativeVolume !== null) reasons.push(`Relative volume is ${relativeVolume.toFixed(2)}x.`);
   if (priceMove !== null) reasons.push(`Latest price move is ${priceMove.toFixed(2)}%.`);
   if (row.liquidity_status) reasons.push(`Liquidity is ${row.liquidity_status}.`);
+  if (row.candidate_tier) reasons.push(`Event quality bucket is ${row.candidate_tier}${row.event_quality_score !== null ? ` (${row.event_quality_score}/100)` : ""}.`);
+  if (row.market_anomaly_score !== null) reasons.push(`Market anomaly score is ${row.market_anomaly_score}/100 (${row.market_anomaly_status || "unknown"}).`);
 
   if (score >= 75) reasons.push("Score is high enough for paper-trade consideration only, not live execution.");
   if (score < 40) reasons.push("Score is too weak for action. Keep it as noise unless a new catalyst appears.");
@@ -202,6 +250,8 @@ function risksFor(row: PendingScoringRow) {
   if (risk.includes("high")) risks.push("AI marked this as high risk. Do not chase without strong confirmation.");
   if ((row.confirmation_status || "") === "unconfirmed") risks.push("Price and volume are not confirming yet.");
   if ((row.liquidity_status || "") === "thin") risks.push("Thin liquidity can cause bad fills and fake moves.");
+  if ((row.candidate_tier || "") === "risk_only") risks.push("Candidate ranking says this is risk-only, not a long setup.");
+  if ((row.market_anomaly_direction || "") === "bearish" && row.direction.toLowerCase() === "bullish") risks.push("Market anomaly conflicts with bullish thesis.");
   if (!risks.length) risks.push("No major scoring penalty, but this still needs price/volume follow-through.");
 
   return risks;
@@ -220,6 +270,8 @@ function scoreRow(row: PendingScoringRow) {
   score += liquidityImpact(row.liquidity_status);
   score += volumeImpact(relativeVolume);
   score += priceImpact(row.direction, priceChange);
+  score += eventQualityImpact(row);
+  score += marketAnomalyImpact(row);
 
   const finalScore = clampScore(score);
   const action = verdictFromScore(finalScore, row);
@@ -263,7 +315,14 @@ async function getPendingRows(limit: number): Promise<PendingScoringRow[]> {
       r.raw_payload->>'ravenMateriality' as raven_materiality,
       r.raw_payload->>'ravenFormFamily' as raven_form_family,
       nullif(r.raw_payload->>'ravenIsRoutineForm4', '')::boolean as raven_is_routine_form4,
-      r.source_url
+      r.source_url,
+      cr.tier as candidate_tier,
+      cr.event_quality_score,
+      cr.trade_bias,
+      cr.ranking_reason,
+      ma.anomaly_score as market_anomaly_score,
+      ma.anomaly_status as market_anomaly_status,
+      ma.direction as market_anomaly_direction
     from sec_filing_summaries s
     left join raw_sec_filings r
       on r.id = s.raw_filing_id
@@ -271,6 +330,10 @@ async function getPendingRows(limit: number): Promise<PendingScoringRow[]> {
       on c.summary_id = s.id
     left join scored_signals scored
       on scored.summary_id = s.id
+    left join candidate_rankings cr
+      on cr.source_event_id = s.accession_number
+    left join market_anomalies ma
+      on ma.ticker = s.ticker
     where scored.id is null
     order by s.created_at desc
     limit ${limit}

@@ -9,12 +9,15 @@ import { scanFinraShortVolume } from "@/lib/finra";
 import { scanFederalRegisterSignals } from "@/lib/federalRegister";
 import { scanFdaSignals } from "@/lib/fda";
 import { scanNewsSignals } from "@/lib/news";
-import { promoteSecDiscoveryFallbackCandidate, scanSecDiscoveryRadar } from "@/lib/secDiscovery";
+import { scanSecDiscoveryRadar } from "@/lib/secDiscovery";
 import { scanCongressSignals } from "@/lib/congress";
 import { syncRadarFromSignalEvents } from "@/lib/radar";
 import { runPaperOrderExecution } from "@/lib/paperExecution";
 import { getPaperPositionLifecycle } from "@/lib/paperLifecycle";
 import { syncShadowTrades } from "@/lib/performance";
+import { rankSignalCandidates } from "@/lib/candidateRanking";
+import { scanMarketAnomalies } from "@/lib/marketAnomalies";
+import { routeBestCandidatesToAi } from "@/lib/aiRouter";
 
 type PipelineStep = {
   name: string;
@@ -131,7 +134,9 @@ export async function runRavenPipeline() {
 
   steps.push(await runStep("sec_scan_and_store", scanAndStoreSecFilings));
   steps.push(await runStep("sec_discovery_radar", scanSecDiscoveryRadar));
-  steps.push(await runStep("sec_discovery_ai_fallback", () => promoteSecDiscoveryFallbackCandidate(1)));
+  steps.push(await runStep("market_anomalies", () => scanMarketAnomalies(35)));
+  steps.push(await runStep("candidate_ranking", () => rankSignalCandidates(100)));
+  steps.push(await runStep("ai_budget_router", () => routeBestCandidatesToAi(1)));
   steps.push(await runStep("ai_classify_one", () => classifyPendingSecFilings(1)));
   steps.push(await runStep("alpaca_confirm", () => confirmPendingSecSignalsWithAlpaca(5)));
   steps.push(await runStep("finra_short_volume", scanFinraShortVolume));
