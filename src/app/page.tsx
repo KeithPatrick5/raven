@@ -476,7 +476,7 @@ export default async function Home() {
               <div className="panel-header">
                 <div>
                   <div className="panel-title">Paper execution switch</div>
-                  <div className="panel-meta">13D. Risk-gated. Disabled by default. POST only when explicitly enabled.</div>
+                  <div className="panel-meta">14. Autonomous paper execution runs inside the pipeline when paper mode is enabled and all gates pass.</div>
                 </div>
                 {paperExecution ? <span className={`badge ${paperExecution.paperTradingEnabled ? "green" : "amber"}`}>{paperExecution.paperTradingEnabled ? "enabled" : "disabled"}</span> : <span className="badge amber">offline</span>}
               </div>
@@ -522,7 +522,7 @@ export default async function Home() {
               <div className="panel-header">
                 <div>
                   <div className="panel-title">Position lifecycle</div>
-                  <div className="panel-meta">13E. Tracks submitted, filled, open, exit-watch, and closed paper positions. No exit orders submitted yet.</div>
+                  <div className="panel-meta">13E/14. Tracks submitted, filled, open, exit-watch, and closed paper positions after autonomous paper execution.</div>
                 </div>
                 {paperLifecycle ? <span className={`badge ${paperLifecycle.pendingExits > 0 ? "amber" : "green"}`}>{paperLifecycle.pendingExits} exit watch</span> : <span className="badge amber">offline</span>}
               </div>

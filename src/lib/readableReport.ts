@@ -72,6 +72,21 @@ function sourceStepLine(run: PipelineLike, name: string, label: string) {
   const rawCount = num(data.rawArticleCount) || num(data.rawEventCount) || num(data.rawCandidateCount) || num(data.rawEntryCount) || num(data.rowCount);
   const suppressed = num(data.weakMatchesSuppressed);
 
+  if (name === "paper_order_execution") {
+    const status = found.ok && data.ok !== false ? "ok" : "needs attention";
+    const orderSubmission = String(data.orderSubmission || "unknown");
+    const enabled = data.paperTradingEnabled ? "enabled" : "disabled";
+    const eligible = num(data.eligible);
+    const reviewed = num(data.candidatesReviewed);
+    const selectedPlan = data.selectedPlan ? "yes" : "no";
+    return `${label}: ${status} | ${seconds(found.durationMs)} | paper ${enabled} | submission ${orderSubmission} | eligible ${eligible}/${reviewed} | selected ${selectedPlan}`;
+  }
+
+  if (name === "paper_position_lifecycle") {
+    const status = found.ok && data.ok !== false ? "ok" : "needs attention";
+    return `${label}: ${status} | ${seconds(found.durationMs)} | open positions ${num(data.openPositions)} | open orders ${num(data.openOrders)} | pending exits ${num(data.pendingExits)}`;
+  }
+
   if (name === "radar_sync") {
     const radarCount = num(data.radarCount);
     const upserted = num(data.upserted);
@@ -125,10 +140,21 @@ function topSignalsFromStep(run: PipelineLike, name: string, source: string, max
 
 function buildRavenRead(run: PipelineLike) {
   const paper = result(run, "paper_trade_engine");
+  const execution = result(run, "paper_order_execution");
   const score = result(run, "score_signals");
   const rejects = asArray(paper.rejects);
   const trades = asArray(paper.trades);
   const scoredSignals = asArray(score.signals);
+  const submittedOrder = execution.submittedOrder;
+  const selectedPlan = asObject(execution.selectedPlan);
+
+  if (execution.orderSubmission === "submitted") {
+    return `Raven autonomously submitted a paper order for ${selectedPlan.ticker || "unknown"}. Live trading remains disabled.`;
+  }
+
+  if (execution.orderSubmission === "blocked" && selectedPlan.ticker) {
+    return `Raven found an eligible paper plan for ${selectedPlan.ticker}, but execution was blocked by safety/risk gates. No paper order was submitted.`;
+  }
 
   if (trades.length) {
     const trade = asObject(trades[0]);
@@ -185,6 +211,8 @@ export function buildPipelineTextReport(run: PipelineLike) {
   const score = result(run, "score_signals");
   const paper = result(run, "paper_trade_engine");
   const review = result(run, "paper_trade_review");
+  const paperExec = result(run, "paper_order_execution");
+  const lifecycle = result(run, "paper_position_lifecycle");
   const paperRejects = asArray(paper.rejects);
   const paperTrades = asArray(paper.trades);
   const issues = reportIssues(run);
@@ -219,6 +247,8 @@ export function buildPipelineTextReport(run: PipelineLike) {
     line("Paper trades opened", num(paper.opened)),
     line("Paper trades rejected", num(paper.rejected)),
     line("Paper trades closed", num(review.closed)),
+    line("Autonomous paper execution", `${paperExec.paperTradingEnabled ? "enabled" : "disabled"}, ${paperExec.orderSubmission || "not run"}`),
+    line("Lifecycle", `${num(lifecycle.openPositions)} open positions, ${num(lifecycle.openOrders)} open orders, ${num(lifecycle.pendingExits)} pending exits`),
     "",
     "SOURCE HEALTH",
     "-------------",
@@ -229,6 +259,8 @@ export function buildPipelineTextReport(run: PipelineLike) {
     sourceStepLine(run, "news", "News"),
     sourceStepLine(run, "sec_discovery_radar", "SEC Discovery"),
     sourceStepLine(run, "radar_sync", "Radar"),
+    sourceStepLine(run, "paper_order_execution", "Paper Execution"),
+    sourceStepLine(run, "paper_position_lifecycle", "Lifecycle"),
     "",
     "TOP SIGNALS THIS RUN",
     "--------------------",
@@ -236,7 +268,7 @@ export function buildPipelineTextReport(run: PipelineLike) {
     "",
     "TRADE DECISION",
     "--------------",
-    paperTrades.length ? `${paperTrades.length} paper trade(s) opened.` : "No paper trades opened.",
+    paperExec.orderSubmission === "submitted" ? "Autonomous Alpaca paper order submitted." : paperTrades.length ? `${paperTrades.length} paper trade(s) opened.` : "No paper trades opened.",
     paperRejects.length ? `Rejected ${paperRejects.length} candidate(s).` : "No new rejects.",
     ...paperRejects.slice(0, 5).map((item) => {
       const reject = asObject(item);

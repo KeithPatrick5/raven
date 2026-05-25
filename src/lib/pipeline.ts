@@ -12,6 +12,8 @@ import { scanNewsSignals } from "@/lib/news";
 import { scanSecDiscoveryRadar } from "@/lib/secDiscovery";
 import { scanCongressSignals } from "@/lib/congress";
 import { syncRadarFromSignalEvents } from "@/lib/radar";
+import { runPaperOrderExecution } from "@/lib/paperExecution";
+import { getPaperPositionLifecycle } from "@/lib/paperLifecycle";
 
 type PipelineStep = {
   name: string;
@@ -138,10 +140,13 @@ export async function runRavenPipeline() {
   steps.push(await runStep("radar_sync", syncRadarFromSignalEvents));
   steps.push(await runStep("score_signals", () => scorePendingSignals(10)));
   steps.push(await runStep("paper_trade_engine", () => runPaperTradeEngine(10)));
+  steps.push(await runStep("paper_order_execution", () => runPaperOrderExecution({ submit: true })));
+  steps.push(await runStep("paper_position_lifecycle", getPaperPositionLifecycle));
   steps.push(await runStep("paper_trade_review", () => reviewOpenPaperTrades(10)));
 
   const failed = steps.filter((step) => !step.ok);
   const opened = steps.find((step) => step.name === "paper_trade_engine")?.result as { opened?: number } | undefined;
+  const execution = steps.find((step) => step.name === "paper_order_execution")?.result as { orderSubmission?: string; submittedOrder?: unknown } | undefined;
   const reviewed = steps.find((step) => step.name === "paper_trade_review")?.result as { closed?: number } | undefined;
 
   const result = {
@@ -153,7 +158,7 @@ export async function runRavenPipeline() {
     summary: {
       steps: steps.length,
       failed: failed.length,
-      paperTradesOpened: opened?.opened || 0,
+      paperTradesOpened: (execution?.orderSubmission === "submitted" ? 1 : 0) || opened?.opened || 0,
       paperTradesClosed: reviewed?.closed || 0
     },
     steps

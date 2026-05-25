@@ -63,6 +63,7 @@ export async function savePipelineRun(run: PipelineRunRecord) {
   const alpaca = stepResult(run, "alpaca_confirm");
   const score = stepResult(run, "score_signals");
   const paper = stepResult(run, "paper_trade_engine");
+  const execution = stepResult(run, "paper_order_execution");
   const review = stepResult(run, "paper_trade_review");
   const duration = Math.max(0, Date.parse(run.finishedAt) - Date.parse(run.startedAt));
   const errors = collectErrors(run);
@@ -99,7 +100,7 @@ export async function savePipelineRun(run: PipelineRunRecord) {
       ${num(ai.classified)},
       ${num(alpaca.confirmed)},
       ${num(score.scored)},
-      ${num(paper.opened)},
+      ${execution.orderSubmission === "submitted" ? 1 : num(paper.opened)},
       ${num(review.closed)},
       ${num(paper.rejected)},
       ${JSON.stringify(run.summary)}::jsonb,
