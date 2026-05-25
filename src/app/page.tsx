@@ -2,6 +2,7 @@ import { getAlpacaPaperSnapshot, type PaperAccountSnapshot } from "@/lib/alpacaT
 import { getLatestPaperDecisions, getLatestPaperTrades } from "@/lib/paper";
 import { getPaperTradePlan } from "@/lib/paperPlanner";
 import { runPaperOrderExecution } from "@/lib/paperExecution";
+import { getPaperPositionLifecycle } from "@/lib/paperLifecycle";
 import { getLatestPipelineRuns } from "@/lib/pipelineRuns";
 import { getActiveRadarTickers } from "@/lib/radar";
 import { getLatestScoredSignals } from "@/lib/scoring";
@@ -193,6 +194,14 @@ async function safePaperExecution() {
   }
 }
 
+async function safePaperLifecycle() {
+  try {
+    return await getPaperPositionLifecycle();
+  } catch {
+    return null;
+  }
+}
+
 async function safePipelineRuns() {
   try {
     return await getLatestPipelineRuns(6);
@@ -210,10 +219,11 @@ async function safeRadarTickers() {
 }
 
 export default async function Home() {
-  const [paperAccount, paperPlan, paperExecution, signals, signalEvents, sourceHealth, paperTrades, paperDecisions, pipelineRuns, radarTickers] = await Promise.all([
+  const [paperAccount, paperPlan, paperExecution, paperLifecycle, signals, signalEvents, sourceHealth, paperTrades, paperDecisions, pipelineRuns, radarTickers] = await Promise.all([
     safeAlpacaPaperAccount(),
     safePaperPlan(),
     safePaperExecution(),
+    safePaperLifecycle(),
     safeSignals(),
     safeSignalEvents(),
     safeSourceHealth(),
@@ -248,6 +258,7 @@ export default async function Home() {
           <a className="nav-item active" href="#overview">Overview <span className="nav-pill">live</span></a>
           <a className="nav-item" href="#account">Paper account <span className="nav-pill">read</span></a>
           <a className="nav-item" href="#plan">Trade plan <span className="nav-pill">{paperPlan?.eligible || 0}</span></a>
+          <a className="nav-item" href="#lifecycle">Lifecycle <span className="nav-pill">{paperLifecycle?.pendingExits || paperLifecycle?.openPositions || 0}</span></a>
           <a className="nav-item" href="#trades">Trades <span className="nav-pill">{openTrades.length}</span></a>
           <a className="nav-item" href="#signals">Signals <span className="nav-pill">{signalEvents.length || signals.length}</span></a>
           <a className="nav-item" href="#radar">Radar <span className="nav-pill">{radarTickers.length}</span></a>
@@ -292,7 +303,7 @@ export default async function Home() {
           <div className="kpi">
             <div className="kpi-label">Open trades</div>
             <div className="kpi-value">{paperAccount ? paperAccount.summary.openPositionCount : openTrades.length}</div>
-            <div className="kpi-note">orders {paperAccount ? paperAccount.summary.openOrderCount : 0}</div>
+            <div className="kpi-note">orders {paperAccount ? paperAccount.summary.openOrderCount : 0} · exits {paperLifecycle?.pendingExits || 0}</div>
           </div>
           <div className="kpi">
             <div className="kpi-label">Latest decision</div>
@@ -459,6 +470,56 @@ export default async function Home() {
                 </>
               ) : (
                 <div className="empty-state">Paper execution switch unavailable.</div>
+              )}
+            </section>
+
+            <section className="panel" id="lifecycle" style={{ marginTop: 14 }}>
+              <div className="panel-header">
+                <div>
+                  <div className="panel-title">Position lifecycle</div>
+                  <div className="panel-meta">13E. Tracks submitted, filled, open, exit-watch, and closed paper positions. No exit orders submitted yet.</div>
+                </div>
+                {paperLifecycle ? <span className={`badge ${paperLifecycle.pendingExits > 0 ? "amber" : "green"}`}>{paperLifecycle.pendingExits} exit watch</span> : <span className="badge amber">offline</span>}
+              </div>
+              {paperLifecycle ? (
+                <>
+                  <div className="run-summary run-summary-tight">
+                    <div><span>Open positions</span><strong>{paperLifecycle.openPositions}</strong></div>
+                    <div><span>Open orders</span><strong>{paperLifecycle.openOrders}</strong></div>
+                    <div><span>Submissions</span><strong>{paperLifecycle.syncedSubmissions}</strong></div>
+                    <div><span>Pending entries</span><strong>{paperLifecycle.pendingEntries}</strong></div>
+                    <div><span>Pending exits</span><strong className={paperLifecycle.pendingExits > 0 ? "text-amber" : "text-green"}>{paperLifecycle.pendingExits}</strong></div>
+                    <div><span>Closed/cancelled</span><strong>{paperLifecycle.closed}</strong></div>
+                  </div>
+                  {paperLifecycle.lifecycle.length > 0 ? (
+                    <div className="signal-list">
+                      {paperLifecycle.lifecycle.slice(0, 5).map((row) => (
+                        <article className="signal-card" key={`${row.ticker}-${row.client_order_id || row.id}`}>
+                          <div className="signal-head">
+                            <div>
+                              <div className="signal-title">{row.ticker} · {cleanLabel(row.status)}</div>
+                              <div className="panel-meta">{row.exit_signal ? cleanLabel(row.exit_signal) : "lifecycle tracked"}</div>
+                            </div>
+                            <div className={`score ${Number(row.unrealized_pl || 0) >= 0 ? "green" : "red"}`}>{signedMoney(Number(row.unrealized_pl || 0))}</div>
+                          </div>
+                          <div className="market-strip">
+                            <span>entry {money(Number(row.entry_price || 0))}</span>
+                            <span>current {money(Number(row.current_price || 0))}</span>
+                            <span>stop {money(Number(row.stop_price || 0))}</span>
+                            <span>target {money(Number(row.target_price || 0))}</span>
+                          </div>
+                          {row.exit_reason ? <p className="signal-copy">{row.exit_reason}</p> : null}
+                        </article>
+                      ))}
+                    </div>
+                  ) : <div className="empty-state">No paper lifecycle rows yet.</div>}
+                  <div className="market-strip" style={{ padding: "0 13px 12px" }}>
+                    <a className="badge blue" href="/api/paper/lifecycle">Lifecycle JSON</a>
+                    <a className="badge blue" href="/api/paper/lifecycle/report">Lifecycle report</a>
+                  </div>
+                </>
+              ) : (
+                <div className="empty-state">Paper lifecycle unavailable.</div>
               )}
             </section>
 

@@ -568,6 +568,70 @@ export async function ensureRavenTables() {
     on paper_order_submissions (ticker, created_at desc)
   `;
 
+  await sql`
+    create table if not exists paper_position_lifecycle (
+      id bigserial primary key,
+      scored_signal_id bigint references scored_signals(id) on delete set null,
+      accession_number text,
+      ticker text not null,
+      side text not null default 'buy',
+      status text not null default 'planned',
+      alpaca_order_id text,
+      client_order_id text,
+      qty numeric,
+      entry_price numeric,
+      current_price numeric,
+      market_value numeric,
+      unrealized_pl numeric,
+      unrealized_plpc numeric,
+      stop_price numeric,
+      target_price numeric,
+      max_hold_at timestamptz,
+      exit_signal text,
+      exit_reason text,
+      raw_payload jsonb not null default '{}'::jsonb,
+      opened_at timestamptz,
+      closed_at timestamptz,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now(),
+      unique(client_order_id)
+    )
+  `;
+
+  await sql`alter table paper_position_lifecycle add column if not exists scored_signal_id bigint`;
+  await sql`alter table paper_position_lifecycle add column if not exists accession_number text`;
+  await sql`alter table paper_position_lifecycle add column if not exists ticker text`;
+  await sql`alter table paper_position_lifecycle add column if not exists side text`;
+  await sql`alter table paper_position_lifecycle add column if not exists status text`;
+  await sql`alter table paper_position_lifecycle add column if not exists alpaca_order_id text`;
+  await sql`alter table paper_position_lifecycle add column if not exists client_order_id text`;
+  await sql`alter table paper_position_lifecycle add column if not exists qty numeric`;
+  await sql`alter table paper_position_lifecycle add column if not exists entry_price numeric`;
+  await sql`alter table paper_position_lifecycle add column if not exists current_price numeric`;
+  await sql`alter table paper_position_lifecycle add column if not exists market_value numeric`;
+  await sql`alter table paper_position_lifecycle add column if not exists unrealized_pl numeric`;
+  await sql`alter table paper_position_lifecycle add column if not exists unrealized_plpc numeric`;
+  await sql`alter table paper_position_lifecycle add column if not exists stop_price numeric`;
+  await sql`alter table paper_position_lifecycle add column if not exists target_price numeric`;
+  await sql`alter table paper_position_lifecycle add column if not exists max_hold_at timestamptz`;
+  await sql`alter table paper_position_lifecycle add column if not exists exit_signal text`;
+  await sql`alter table paper_position_lifecycle add column if not exists exit_reason text`;
+  await sql`alter table paper_position_lifecycle add column if not exists raw_payload jsonb not null default '{}'::jsonb`;
+  await sql`alter table paper_position_lifecycle add column if not exists opened_at timestamptz`;
+  await sql`alter table paper_position_lifecycle add column if not exists closed_at timestamptz`;
+  await sql`alter table paper_position_lifecycle add column if not exists created_at timestamptz not null default now()`;
+  await sql`alter table paper_position_lifecycle add column if not exists updated_at timestamptz not null default now()`;
+
+  await sql`
+    create index if not exists paper_position_lifecycle_status_updated_idx
+    on paper_position_lifecycle (status, updated_at desc)
+  `;
+
+  await sql`
+    create index if not exists paper_position_lifecycle_ticker_updated_idx
+    on paper_position_lifecycle (ticker, updated_at desc)
+  `;
+
 
   await sql`
     create table if not exists pipeline_runs (
