@@ -329,39 +329,6 @@ export async function ensureRavenTables() {
 
 
   await sql`
-    create table if not exists raw_congress_trades (
-      id bigserial primary key,
-      source_id text not null unique,
-      provider text not null,
-      ticker text not null,
-      politician text,
-      chamber text,
-      transaction_type text,
-      amount_range text,
-      transaction_date date,
-      report_date date,
-      reporting_delay_days integer,
-      asset_description text,
-      source_url text,
-      raw_payload jsonb not null default '{}'::jsonb,
-      created_at timestamptz not null default now(),
-      updated_at timestamptz not null default now()
-    )
-  `;
-
-  await sql`
-    create index if not exists raw_congress_trades_ticker_date_idx
-    on raw_congress_trades (ticker, transaction_date desc)
-  `;
-
-  await sql`
-    create index if not exists raw_congress_trades_report_date_idx
-    on raw_congress_trades (report_date desc)
-  `;
-
-
-
-  await sql`
     create table if not exists telegram_alerts (
       id bigserial primary key,
       scored_signal_id bigint references scored_signals(id) on delete cascade,

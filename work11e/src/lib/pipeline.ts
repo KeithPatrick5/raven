@@ -8,7 +8,6 @@ import { savePipelineRun } from "@/lib/pipelineRuns";
 import { scanFinraShortVolume } from "@/lib/finra";
 import { scanFederalRegisterSignals } from "@/lib/federalRegister";
 import { scanFdaSignals } from "@/lib/fda";
-import { scanCongressSignals } from "@/lib/congress";
 
 type PipelineStep = {
   name: string;
@@ -129,7 +128,6 @@ export async function runRavenPipeline() {
   steps.push(await runStep("finra_short_volume", scanFinraShortVolume));
   steps.push(await runStep("federal_register", scanFederalRegisterSignals));
   steps.push(await runStep("fda", scanFdaSignals));
-  steps.push(await runStep("congress", scanCongressSignals));
   steps.push(await runStep("score_signals", () => scorePendingSignals(10)));
   steps.push(await runStep("paper_trade_engine", () => runPaperTradeEngine(10)));
   steps.push(await runStep("paper_trade_review", () => reviewOpenPaperTrades(10)));
