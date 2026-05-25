@@ -405,3 +405,183 @@ export async function scanSecDiscoveryRadar() {
     errors
   };
 }
+
+export async function promoteSecDiscoveryFallbackCandidate(limit = 1) {
+  if (!hasDatabase()) {
+    return {
+      ok: false,
+      phase: "SEC_DISCOVERY_AI_FALLBACK",
+      database: "not_configured" as const,
+      promoted: 0,
+      skipped: 0,
+      pendingWatchlistFilings: 0,
+      candidatesReviewed: 0,
+      reason: "database_not_configured",
+      promotedCandidates: [],
+      errors: [{ error: "DATABASE_URL or STORAGE_URL is not configured." }]
+    };
+  }
+
+  await ensureRavenTables();
+  const sql = db();
+
+  const pendingWatchlist = await sql<Array<{ count: number }>>`
+    select count(*)::integer as count
+    from raw_sec_filings r
+    left join sec_filing_summaries s
+      on s.raw_filing_id = r.id
+    where s.id is null
+  `;
+  const pendingWatchlistFilings = Number(pendingWatchlist[0]?.count || 0);
+
+  if (pendingWatchlistFilings > 0) {
+    return {
+      ok: true,
+      phase: "SEC_DISCOVERY_AI_FALLBACK",
+      database: "configured" as const,
+      promoted: 0,
+      skipped: 0,
+      pendingWatchlistFilings,
+      candidatesReviewed: 0,
+      reason: "watchlist_sec_pending_first",
+      promotedCandidates: [],
+      errors: []
+    };
+  }
+
+  const candidates = await sql<Array<{
+    id: number;
+    ticker: string;
+    cik: string;
+    company_name: string;
+    form: string;
+    accession_number: string;
+    filing_date: string | null;
+    filing_url: string | null;
+    priority: string;
+    priority_score: number;
+    materiality: string;
+    form_family: string;
+    raw_payload: Record<string, unknown>;
+  }>>`
+    select
+      d.id,
+      d.ticker,
+      d.cik,
+      d.company_name,
+      d.form,
+      d.accession_number,
+      d.filing_date::text as filing_date,
+      d.filing_url,
+      d.priority,
+      d.priority_score,
+      d.materiality,
+      d.form_family,
+      d.raw_payload
+    from raw_sec_discovery_filings d
+    left join raw_sec_filings r
+      on r.accession_number = d.accession_number
+    left join sec_filing_summaries s
+      on s.accession_number = d.accession_number
+    where r.id is null
+      and s.id is null
+      and d.priority_score >= 70
+      and d.filing_url is not null
+    order by
+      case
+        when upper(d.form) in ('SC 13D', 'SC 13D/A', '13D') then 1
+        when upper(d.form) = '8-K' then 2
+        when upper(d.form) in ('NT 10-Q', 'NT 10-K') then 3
+        when upper(d.form) in ('424B5', 'S-3', 'S-1') then 4
+        else 5
+      end asc,
+      d.priority_score desc,
+      d.updated_at desc
+    limit ${limit}
+  `;
+
+  let promoted = 0;
+  let skipped = 0;
+  const promotedCandidates: Array<Record<string, unknown>> = [];
+  const errors: Array<{ ticker?: string; accessionNumber?: string; error: string }> = [];
+
+  for (const candidate of candidates) {
+    try {
+      const rawPayload = {
+        ...(candidate.raw_payload || {}),
+        companyName: candidate.company_name,
+        primaryDocDescription: `${candidate.form} SEC discovery fallback`,
+        ravenPriority: candidate.priority,
+        ravenPriorityScore: candidate.priority_score,
+        ravenMateriality: candidate.materiality,
+        ravenFormFamily: candidate.form_family,
+        ravenSource: "sec_discovery_ai_fallback",
+        ravenFallbackNote: "Promoted from SEC Discovery because no fresh watchlist SEC filings were waiting for AI classification."
+      };
+
+      const inserted = await sql<Array<{ inserted: boolean }>>`
+        insert into raw_sec_filings (
+          ticker,
+          cik,
+          accession_number,
+          form,
+          filing_date,
+          report_date,
+          primary_document,
+          primary_document_url,
+          source_url,
+          raw_payload
+        ) values (
+          ${candidate.ticker},
+          ${candidate.cik},
+          ${candidate.accession_number},
+          ${candidate.form},
+          ${candidate.filing_date},
+          ${candidate.filing_date},
+          ${candidate.filing_url},
+          ${candidate.filing_url},
+          ${candidate.filing_url || `https://www.sec.gov/edgar/browse/?CIK=${candidate.cik}`},
+          ${JSON.stringify(rawPayload)}::jsonb
+        )
+        on conflict (accession_number) do nothing
+        returning (xmax = 0) as inserted
+      `;
+
+      if (inserted[0]?.inserted) {
+        promoted += 1;
+        promotedCandidates.push({
+          ticker: candidate.ticker,
+          form: candidate.form,
+          accessionNumber: candidate.accession_number,
+          filingDate: candidate.filing_date,
+          priority: candidate.priority,
+          priorityScore: candidate.priority_score,
+          action: (candidate.raw_payload as any)?.action || null,
+          direction: (candidate.raw_payload as any)?.direction || null,
+          sourceUrl: candidate.filing_url
+        });
+      } else {
+        skipped += 1;
+      }
+    } catch (error) {
+      errors.push({
+        ticker: candidate.ticker,
+        accessionNumber: candidate.accession_number,
+        error: error instanceof Error ? error.message : "Unknown SEC discovery fallback promotion error"
+      });
+    }
+  }
+
+  return {
+    ok: errors.length === 0,
+    phase: "SEC_DISCOVERY_AI_FALLBACK",
+    database: "configured" as const,
+    promoted,
+    skipped,
+    pendingWatchlistFilings,
+    candidatesReviewed: candidates.length,
+    reason: promoted > 0 ? "promoted_discovery_candidate_for_ai" : "no_unclassified_discovery_candidates",
+    promotedCandidates,
+    errors
+  };
+}

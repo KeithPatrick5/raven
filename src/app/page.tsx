@@ -343,12 +343,14 @@ export default async function Home() {
         <section className="ai-usage-strip" id="ai-usage">
           <div className="ai-usage-main">
             <div>
-              <div className="eyebrow">Groq usage meter</div>
+              <div className="eyebrow">Groq usage meter · last 24h</div>
               <div className="ai-usage-title">{aiUsage ? `${aiUsage.calls.total} calls · ${aiUsage.tokens.total.toLocaleString()} tokens` : "No Groq usage logged yet"}</div>
             </div>
             <div className="ai-usage-actions">
-              <a className="badge blue" href="/api/ai/usage?window=24h">Usage JSON</a>
-              <a className="badge blue" href="/api/ai/usage/report?window=24h">Usage report</a>
+              <a className="badge blue" href="/api/ai/usage/report?window=1h">1h</a>
+              <a className="badge blue" href="/api/ai/usage/report?window=24h">24h report</a>
+              <a className="badge blue" href="/api/ai/usage/report?window=7d">7d</a>
+              <a className="badge blue" href="/api/ai/usage?window=24h">JSON</a>
             </div>
           </div>
           <div className="ai-usage-grid">
@@ -358,8 +360,8 @@ export default async function Home() {
             <div><span>Failed</span><strong className={aiUsage?.calls.failed ? "text-red" : "text-green"}>{aiUsage ? aiUsage.calls.failed : 0}</strong></div>
             <div><span>Est. cost</span><strong>{aiUsage ? aiUsage.cost.display : "$0.0000"}</strong></div>
           </div>
-          <div className="usage-meter"><span style={{ width: `${aiUsage ? Math.min(100, Math.max(4, aiUsage.calls.successRate)) : 4}%` }} /></div>
-          <div className="ai-usage-note">Tracking only. Raven does not enforce Groq limits in this phase.</div>
+          <div className="usage-meter"><span style={{ width: `${aiUsage ? Math.min(100, Math.max(4, aiUsage.calls.total * 12)) : 4}%` }} /></div>
+          <div className="ai-usage-note">Last 24h activity meter only. Raven does not enforce Groq limits in this phase.</div>
         </section>
 
         <section className="panel cron-panel" id="cron">

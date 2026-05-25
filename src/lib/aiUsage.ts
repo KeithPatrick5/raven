@@ -293,7 +293,7 @@ export async function getAiUsageReport(windowInput?: string | null) {
   if (!snapshot.ok) {
     lines.push("AI usage tracking is not available because the database is not configured.");
   } else if (snapshot.calls.total === 0) {
-    lines.push("No Groq calls logged in this window yet. Usage tracking starts from this build going forward.");
+    lines.push("No Groq calls logged in this window. This is normal if Raven had no fresh watchlist SEC filing or promoted SEC Discovery candidate to classify.");
   } else if (snapshot.calls.failed > 0) {
     lines.push(`Groq is being used, but ${snapshot.calls.failed} call(s) failed in this window. Check recent errors before increasing cadence.`);
   } else {

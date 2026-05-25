@@ -123,7 +123,7 @@ export async function getCronStatusSnapshot(): Promise<CronStatusSnapshot> {
     diagnosis.push("Cron route is /api/run. The /api/cron/run route is only an alias for humans and debugging.");
 
     if (latest.ai_classified === 0 && latest.sec_filings_found > 0 && latest.sec_filings_saved === 0) {
-      diagnosis.push("AI classified 0 because SEC found filings but saved 0 new rows. Existing filings were skipped as duplicates, so there was nothing new to classify.");
+      diagnosis.push("AI classified 0 because watchlist SEC saved 0 new rows. SEC Discovery fallback is now enabled, so Raven should promote one high-priority discovery candidate when available.");
     }
 
     if (latest.steps_failed === 0) {

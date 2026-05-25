@@ -86,6 +86,12 @@ function sourceStepLine(run: PipelineLike, name: string, label: string) {
     const status = found.ok && data.ok !== false ? "ok" : "needs attention";
     return `${label}: ${status} | ${seconds(found.durationMs)} | open positions ${num(data.openPositions)} | open orders ${num(data.openOrders)} | pending exits ${num(data.pendingExits)}`;
   }
+
+  if (name === "sec_discovery_ai_fallback") {
+    const status = found.ok && data.ok !== false ? "ok" : "needs attention";
+    return `${label}: ${status} | ${seconds(found.durationMs)} | promoted ${num(data.promoted)} | reviewed ${num(data.candidatesReviewed)} | reason ${String(data.reason || "unknown")}`;
+  }
+
   if (name === "shadow_trade_sync") {
     const status = found.ok && data.ok !== false ? "ok" : "needs attention";
     return `${label}: ${status} | ${seconds(found.durationMs)} | reviewed ${num(data.reviewed)} | created ${num(data.created)} | updated ${num(data.updated)} | active ${num(data.active)}`;
@@ -218,6 +224,7 @@ export function buildPipelineTextReport(run: PipelineLike) {
   const review = result(run, "paper_trade_review");
   const paperExec = result(run, "paper_order_execution");
   const lifecycle = result(run, "paper_position_lifecycle");
+  const fallback = result(run, "sec_discovery_ai_fallback");
   const paperRejects = asArray(paper.rejects);
   const paperTrades = asArray(paper.trades);
   const issues = reportIssues(run);
@@ -246,8 +253,10 @@ export function buildPipelineTextReport(run: PipelineLike) {
     "CRON / AI NOTE",
     "--------------",
     num(ai.classified) === 0 && num(sec.filingCount) > 0 && num(secStorage.saved) === 0
-      ? "AI classified 0 because SEC found filings but saved 0 new rows. Existing filings were skipped as duplicates, so there was nothing new to classify."
-      : "AI classification ran only when a new pending SEC filing needed classification.",
+      ? (num(fallback.promoted) > 0
+        ? `Watchlist SEC had 0 new rows, so Raven promoted ${num(fallback.promoted)} SEC Discovery candidate(s) into the AI queue. AI still classified 0 if the candidate failed classification or was already summarized.`
+        : `AI classified 0 because watchlist SEC found 0 new rows and SEC Discovery fallback promoted 0 candidates. Fallback reason: ${String(fallback.reason || "not run")}.`)
+      : "AI classification ran when a new pending SEC filing or promoted discovery candidate needed classification.",
     "Cron route is /api/run. Manual debug alias is /api/cron/run.",
     "",
     "CORE RESULT",
@@ -270,6 +279,7 @@ export function buildPipelineTextReport(run: PipelineLike) {
     sourceStepLine(run, "congress", "Congress"),
     sourceStepLine(run, "news", "News"),
     sourceStepLine(run, "sec_discovery_radar", "SEC Discovery"),
+    sourceStepLine(run, "sec_discovery_ai_fallback", "SEC Discovery AI fallback"),
     sourceStepLine(run, "radar_sync", "Radar"),
     sourceStepLine(run, "paper_order_execution", "Paper Execution"),
     sourceStepLine(run, "shadow_trade_sync", "Shadow Trades"),
