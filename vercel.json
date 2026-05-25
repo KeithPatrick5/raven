@@ -5,6 +5,6 @@
       "schedule": "*/15 13-20 * * 1-5"
     }
   ],
-  "installCommand": "npm ci --no-audit --no-fund",
-  "buildCommand": "npm run build"
+  "installCommand": "corepack enable && pnpm install --no-frozen-lockfile",
+  "buildCommand": "corepack enable && pnpm run build"
 }
