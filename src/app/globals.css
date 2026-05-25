@@ -499,3 +499,58 @@ h1 {
 .compact-status strong {
   color: var(--text);
 }
+
+.run-summary {
+  display: grid;
+}
+
+.run-summary div {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 13px;
+  border-bottom: 1px solid var(--line-soft);
+  font-size: 12px;
+}
+
+.run-summary span {
+  color: var(--muted);
+}
+
+.run-summary strong {
+  color: var(--text);
+  text-align: right;
+}
+
+.run-list {
+  display: grid;
+}
+
+.run-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 13px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.run-time {
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.run-metrics {
+  color: var(--muted);
+  font-size: 11px;
+  margin-top: 3px;
+}
+
+.run-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}

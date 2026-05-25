@@ -61,6 +61,28 @@ function cleanLabel(value: string | null | undefined) {
   return value.split("_").join(" ");
 }
 
+function runOutcome(run: { steps_failed: number; paper_trades_opened: number; paper_trades_closed: number; paper_trades_rejected: number }) {
+  if (run.steps_failed > 0) return "failed";
+  if (run.paper_trades_opened > 0) return "opened";
+  if (run.paper_trades_closed > 0) return "closed";
+  if (run.paper_trades_rejected > 0) return "rejected";
+  return "clean";
+}
+
+function runToneFromOutcome(outcome: string) {
+  if (outcome === "opened" || outcome === "closed" || outcome === "clean") return "green";
+  if (outcome === "rejected") return "amber";
+  return "red";
+}
+
+function runLine(run: { sec_filings_found: number; sec_filings_saved: number; ai_classified: number; alpaca_confirmed: number; signals_scored: number; paper_trades_opened: number; paper_trades_closed: number; paper_trades_rejected: number; steps_failed: number }) {
+  if (run.steps_failed > 0) return `${run.steps_failed} error${run.steps_failed === 1 ? "" : "s"}`;
+  if (run.paper_trades_opened > 0) return `${run.paper_trades_opened} opened`;
+  if (run.paper_trades_closed > 0) return `${run.paper_trades_closed} closed`;
+  if (run.paper_trades_rejected > 0) return `${run.paper_trades_rejected} rejected`;
+  return "no trade";
+}
+
 function primaryReason(reasons: string[]) {
   if (!reasons.length) return "No reason logged.";
   const useful = reasons.find((reason) => !reason.toLowerCase().startsWith("ai tradeability starts"));
@@ -263,26 +285,73 @@ export default async function Home() {
                   <div className="panel-title">Last run</div>
                   <div className="panel-meta">{latestRun ? shortDate(latestRun.created_at) : "No run"}</div>
                 </div>
-                {latestRun ? <span className={`badge ${statusTone(latestRun.status)}`}>{latestRun.status}</span> : <span className="badge amber">none</span>}
+                {latestRun ? <span className={`badge ${runToneFromOutcome(runOutcome(latestRun))}`}>{runLine(latestRun)}</span> : <span className="badge amber">none</span>}
               </div>
               {latestRun ? (
-                <div className="table-wrap">
-                  <table className="table">
-                    <tbody>
-                      <tr><td>Duration</td><td>{seconds(latestRun.duration_ms)}</td></tr>
-                      <tr><td>Filings</td><td>{latestRun.sec_filings_found} found · {latestRun.sec_filings_saved} new</td></tr>
-                      <tr><td>Classified</td><td>{latestRun.ai_classified}</td></tr>
-                      <tr><td>Confirmed</td><td>{latestRun.alpaca_confirmed}</td></tr>
-                      <tr><td>Scored</td><td>{latestRun.signals_scored}</td></tr>
-                      <tr><td>Opened</td><td>{latestRun.paper_trades_opened}</td></tr>
-                      <tr><td>Closed</td><td>{latestRun.paper_trades_closed}</td></tr>
-                      <tr><td>Rejected</td><td>{latestRun.paper_trades_rejected}</td></tr>
-                      <tr><td>Errors</td><td>{latestRun.steps_failed}</td></tr>
-                    </tbody>
-                  </table>
-                </div>
+                <>
+                  <div className="run-summary">
+                    <div>
+                      <span>Status</span>
+                      <strong className={latestRun.steps_failed ? "text-red" : "text-green"}>{latestRun.status}</strong>
+                    </div>
+                    <div>
+                      <span>Duration</span>
+                      <strong>{seconds(latestRun.duration_ms)}</strong>
+                    </div>
+                    <div>
+                      <span>Filings</span>
+                      <strong>{latestRun.sec_filings_found} found · {latestRun.sec_filings_saved} new</strong>
+                    </div>
+                    <div>
+                      <span>AI / market</span>
+                      <strong>{latestRun.ai_classified} classified · {latestRun.alpaca_confirmed} confirmed</strong>
+                    </div>
+                    <div>
+                      <span>Signal result</span>
+                      <strong>{latestRun.signals_scored} scored · {latestRun.paper_trades_rejected} rejected</strong>
+                    </div>
+                    <div>
+                      <span>Trades</span>
+                      <strong>{latestRun.paper_trades_opened} opened · {latestRun.paper_trades_closed} closed</strong>
+                    </div>
+                    <div>
+                      <span>Errors</span>
+                      <strong className={latestRun.steps_failed ? "text-red" : "text-green"}>{latestRun.steps_failed}</strong>
+                    </div>
+                  </div>
+                </>
               ) : (
                 <div className="empty-state">No run history.</div>
+              )}
+            </section>
+
+            <section className="panel" style={{ marginTop: 14 }}>
+              <div className="panel-header">
+                <div>
+                  <div className="panel-title">Run history</div>
+                  <div className="panel-meta">Latest cron and manual runs</div>
+                </div>
+              </div>
+              {pipelineRuns.length > 0 ? (
+                <div className="run-list">
+                  {pipelineRuns.map((run) => {
+                    const outcome = runOutcome(run);
+                    return (
+                      <div className="run-row" key={run.id}>
+                        <div>
+                          <div className="run-time">{shortDate(run.created_at)}</div>
+                          <div className="run-metrics">F {run.sec_filings_found}/{run.sec_filings_saved} · AI {run.ai_classified} · Score {run.signals_scored}</div>
+                        </div>
+                        <div className="run-right">
+                          <span className={`badge ${runToneFromOutcome(outcome)}`}>{runLine(run)}</span>
+                          <span>{seconds(run.duration_ms)}</span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="empty-state">No runs logged.</div>
               )}
             </section>
 
