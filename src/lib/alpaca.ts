@@ -132,23 +132,31 @@ function tradingBaseUrl(mode: AlpacaAccountMode = "paper") {
   return (mode === "live" ? liveUrl : paperUrl).replace(/\/$/, "");
 }
 
-async function alpacaTradingRequest<T>(path: string, mode: AlpacaAccountMode = "paper"): Promise<T> {
+type AlpacaTradingRequestOptions = {
+  method?: "GET" | "POST";
+  body?: Record<string, unknown>;
+};
+
+async function alpacaTradingRequest<T>(path: string, mode: AlpacaAccountMode = "paper", options: AlpacaTradingRequestOptions = {}): Promise<T> {
   if (!hasAlpacaProvider()) {
     throw new Error("ALPACA_API_KEY_ID and ALPACA_API_SECRET_KEY are not configured.");
   }
 
   const response = await fetch(`${tradingBaseUrl(mode)}/v2${path}`, {
+    method: options.method || "GET",
     headers: {
       "APCA-API-KEY-ID": apiKeyId(),
       "APCA-API-SECRET-KEY": apiSecretKey(),
-      Accept: "application/json"
+      Accept: "application/json",
+      ...(options.body ? { "Content-Type": "application/json" } : {})
     },
+    body: options.body ? JSON.stringify(options.body) : undefined,
     cache: "no-store"
   });
 
   if (!response.ok) {
     const body = await response.text();
-    throw new Error(`Alpaca trading request failed: ${response.status} ${body.slice(0, 220)}`);
+    throw new Error(`Alpaca trading request failed: ${response.status} ${body.slice(0, 300)}`);
   }
 
   return response.json() as Promise<T>;
@@ -195,6 +203,23 @@ export async function getAlpacaOrders(mode: AlpacaAccountMode = "paper", status:
   });
 
   return alpacaTradingRequest<AlpacaOrder[]>(`/orders?${params.toString()}`, mode);
+}
+
+
+export async function placePaperMarketBuyOrder(input: { symbol: string; notional: number; clientOrderId: string }) {
+  const notional = Math.max(1, Math.round(input.notional * 100) / 100);
+
+  return alpacaTradingRequest<AlpacaOrder>("/orders", "paper", {
+    method: "POST",
+    body: {
+      symbol: input.symbol.toUpperCase(),
+      notional: notional.toFixed(2),
+      side: "buy",
+      type: "market",
+      time_in_force: "day",
+      client_order_id: input.clientOrderId
+    }
+  });
 }
 
 export async function getPaperAccountSnapshot(): Promise<PaperAccountSnapshot> {

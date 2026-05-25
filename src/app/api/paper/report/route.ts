@@ -1,4 +1,5 @@
 import { getPaperAccountSnapshot } from "@/lib/alpaca";
+import { getLatestPaperDecisions, getLatestPaperTrades } from "@/lib/paper";
 
 export const dynamic = "force-dynamic";
 
@@ -18,7 +19,15 @@ function signedPct(value: number | null) {
 }
 
 export async function GET() {
-  const snapshot = await getPaperAccountSnapshot();
+  const [snapshot, trades, decisions] = await Promise.all([
+    getPaperAccountSnapshot(),
+    getLatestPaperTrades(25),
+    getLatestPaperDecisions(25)
+  ]);
+  const pendingTrades = trades.filter((trade) => trade.status === "pending_entry");
+  const openTrades = trades.filter((trade) => trade.status === "open" || trade.status === "pending_exit");
+  const closedTrades = trades.filter((trade) => trade.status === "closed");
+  const rejected = decisions.filter((decision) => decision.decision === "reject");
   const lines: string[] = [];
 
   lines.push("RAVEN PAPER ACCOUNT");
@@ -65,6 +74,65 @@ export async function GET() {
   } else {
     lines.push("None");
   }
+
+  lines.push("");
+  lines.push("RAVEN PAPER TRADES");
+  lines.push("------------------");
+  lines.push(`Pending entries: ${pendingTrades.length}`);
+  lines.push(`Open local trades: ${openTrades.length}`);
+  lines.push(`Closed local trades: ${closedTrades.length}`);
+  lines.push(`Rejected candidates: ${rejected.length}`);
+
+  lines.push("");
+  lines.push("PENDING ENTRIES");
+  lines.push("---------------");
+  if (pendingTrades.length) {
+    for (const trade of pendingTrades.slice(0, 10)) {
+      lines.push(`${trade.ticker} | score ${trade.final_score} | notional ${money(trade.notional)} | entry ref ${money(trade.entry_price)} | target ${money(trade.target_price)} | stop ${money(trade.stop_price)}`);
+    }
+  } else {
+    lines.push("None");
+  }
+
+  lines.push("");
+  lines.push("LOCAL OPEN TRADES");
+  lines.push("-----------------");
+  if (openTrades.length) {
+    for (const trade of openTrades.slice(0, 10)) {
+      lines.push(`${trade.ticker} | ${trade.status} | notional ${money(trade.notional)} | qty ${trade.qty || "--"} | target ${money(trade.target_price)} | stop ${money(trade.stop_price)} | order ${trade.alpaca_order_id || "--"}`);
+    }
+  } else {
+    lines.push("None");
+  }
+
+  lines.push("");
+  lines.push("LOCAL CLOSED TRADES");
+  lines.push("-------------------");
+  if (closedTrades.length) {
+    for (const trade of closedTrades.slice(0, 10)) {
+      lines.push(`${trade.ticker} | ${trade.outcome || "closed"} | entry ${money(trade.entry_price)} | exit ${money(trade.exit_price)} | P/L ${signedPct(trade.pnl_percent)}`);
+    }
+  } else {
+    lines.push("None");
+  }
+
+  lines.push("");
+  lines.push("REJECTED CANDIDATES");
+  lines.push("-------------------");
+  if (rejected.length) {
+    for (const item of rejected.slice(0, 10)) {
+      const rejects = Array.isArray(item.reject_codes) ? item.reject_codes.join(", ") : "rejected";
+      lines.push(`${item.ticker} | score ${item.final_score} | ${item.action} | ${rejects}`);
+    }
+  } else {
+    lines.push("None");
+  }
+
+  lines.push("");
+  lines.push("RAVEN STATUS");
+  lines.push("------------");
+  lines.push("Paper execution requires RAVEN_PAPER_EXECUTION_ENABLED=true.");
+  lines.push("Live trading disabled.");
 
   if (snapshot.errors.length) {
     lines.push("");

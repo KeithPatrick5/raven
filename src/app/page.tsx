@@ -203,7 +203,8 @@ export default async function Home() {
   ]);
 
   const latestRun = pipelineRuns[0];
-  const openTrades = paperTrades.filter((trade) => trade.status === "open");
+  const pendingTrades = paperTrades.filter((trade) => trade.status === "pending_entry");
+  const openTrades = paperTrades.filter((trade) => trade.status === "open" || trade.status === "pending_exit");
   const closedTrades = paperTrades.filter((trade) => trade.status === "closed");
   const latestSignal = signals[0];
   const latestSignalEvent = signalEvents[0];
@@ -227,7 +228,7 @@ export default async function Home() {
         <nav className="nav" aria-label="Raven navigation">
           <a className="nav-item active" href="#overview">Overview <span className="nav-pill">live</span></a>
           <a className="nav-item" href="#paper-account">Account <span className="nav-pill">paper</span></a>
-          <a className="nav-item" href="#trades">Trades <span className="nav-pill">{openTrades.length}</span></a>
+          <a className="nav-item" href="#trades">Trades <span className="nav-pill">{openTrades.length + pendingTrades.length}</span></a>
           <a className="nav-item" href="#signals">Signals <span className="nav-pill">{signalEvents.length || signals.length}</span></a>
           <a className="nav-item" href="#radar">Radar <span className="nav-pill">{radarTickers.length}</span></a>
           <a className="nav-item" href="#decisions">Decisions <span className="nav-pill">{paperDecisions.length}</span></a>
@@ -266,7 +267,7 @@ export default async function Home() {
           <div className="kpi">
             <div className="kpi-label">Open trades</div>
             <div className="kpi-value">{openTrades.length}</div>
-            <div className="kpi-note">{closedTrades.length} closed</div>
+            <div className="kpi-note">{pendingTrades.length} pending · {closedTrades.length} closed</div>
           </div>
           <div className="kpi">
             <div className="kpi-label">Latest decision</div>
@@ -324,9 +325,9 @@ export default async function Home() {
               <div className="panel-header">
                 <div>
                   <div className="panel-title">Paper trades</div>
-                  <div className="panel-meta">Open and closed</div>
+                  <div className="panel-meta">Pending, open, and closed</div>
                 </div>
-                <span className="badge green">{openTrades.length} open</span>
+                <span className="badge green">{openTrades.length} open · {pendingTrades.length} pending</span>
               </div>
               {paperTrades.length > 0 ? (
                 <div className="signal-list">
@@ -341,9 +342,12 @@ export default async function Home() {
                       </div>
                       <div className="market-strip">
                         <span>entry {trade.entry_price}</span>
+                        {trade.notional ? <span>size {money(trade.notional)}</span> : null}
+                        {trade.qty ? <span>qty {trade.qty}</span> : null}
                         <span>stop {trade.stop_price}</span>
                         <span>target {trade.target_price}</span>
                         {trade.exit_price ? <span>exit {trade.exit_price}</span> : null}
+                        {trade.alpaca_order_id ? <span>order {trade.alpaca_order_id.slice(0, 8)}</span> : null}
                         {trade.pnl_percent ? <span>p/l {trade.pnl_percent}%</span> : null}
                       </div>
                       <p className="signal-copy">{trade.status === "closed" ? `${trade.outcome || "closed"}: ${trade.close_reason || "reviewed"}` : trade.decision_reason}</p>
