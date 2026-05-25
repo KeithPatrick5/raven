@@ -1,3 +1,4 @@
+import { getAlpacaPaperSnapshot, type PaperAccountSnapshot } from "@/lib/alpacaTrading";
 import { getLatestPaperDecisions, getLatestPaperTrades } from "@/lib/paper";
 import { getLatestPipelineRuns } from "@/lib/pipelineRuns";
 import { getActiveRadarTickers } from "@/lib/radar";
@@ -8,6 +9,24 @@ import { watchlist } from "@/lib/watchlist";
 export const dynamic = "force-dynamic";
 
 type Jsonish = string[] | string | null | undefined;
+
+
+function money(value: number | null | undefined) {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "--";
+  return `$${value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function signedMoney(value: number | null | undefined) {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "--";
+  const prefix = value > 0 ? "+" : "";
+  return `${prefix}${money(value)}`;
+}
+
+function paperAccountTone(snapshot: PaperAccountSnapshot | null) {
+  if (!snapshot || !snapshot.configured) return "amber";
+  if (!snapshot.ok || snapshot.summary.tradingBlocked) return "red";
+  return "green";
+}
 
 function scoreTone(score: number) {
   if (score >= 70) return "green";
@@ -108,6 +127,14 @@ function primaryReason(reasons: string[]) {
   return useful || reasons[0];
 }
 
+async function safeAlpacaPaperAccount() {
+  try {
+    return await getAlpacaPaperSnapshot(12);
+  } catch {
+    return null;
+  }
+}
+
 async function safeSignals() {
   try {
     return await getLatestScoredSignals(6);
@@ -165,7 +192,8 @@ async function safeRadarTickers() {
 }
 
 export default async function Home() {
-  const [signals, signalEvents, sourceHealth, paperTrades, paperDecisions, pipelineRuns, radarTickers] = await Promise.all([
+  const [paperAccount, signals, signalEvents, sourceHealth, paperTrades, paperDecisions, pipelineRuns, radarTickers] = await Promise.all([
+    safeAlpacaPaperAccount(),
     safeSignals(),
     safeSignalEvents(),
     safeSourceHealth(),
@@ -198,6 +226,7 @@ export default async function Home() {
 
         <nav className="nav" aria-label="Raven navigation">
           <a className="nav-item active" href="#overview">Overview <span className="nav-pill">live</span></a>
+          <a className="nav-item" href="#account">Paper account <span className="nav-pill">read</span></a>
           <a className="nav-item" href="#trades">Trades <span className="nav-pill">{openTrades.length}</span></a>
           <a className="nav-item" href="#signals">Signals <span className="nav-pill">{signalEvents.length || signals.length}</span></a>
           <a className="nav-item" href="#radar">Radar <span className="nav-pill">{radarTickers.length}</span></a>
@@ -235,9 +264,14 @@ export default async function Home() {
             <div className="kpi-note">{latestRun ? `${shortDate(latestRun.created_at)} · ${seconds(latestRun.duration_ms)}` : "No runs yet"}</div>
           </div>
           <div className="kpi">
+            <div className="kpi-label">Paper equity</div>
+            <div className={`kpi-value text-${paperAccountTone(paperAccount)}`}>{paperAccount ? money(paperAccount.summary.equity) : "--"}</div>
+            <div className="kpi-note">cash {paperAccount ? money(paperAccount.summary.cash) : "--"}</div>
+          </div>
+          <div className="kpi">
             <div className="kpi-label">Open trades</div>
-            <div className="kpi-value">{openTrades.length}</div>
-            <div className="kpi-note">{closedTrades.length} closed</div>
+            <div className="kpi-value">{paperAccount ? paperAccount.summary.openPositionCount : openTrades.length}</div>
+            <div className="kpi-note">orders {paperAccount ? paperAccount.summary.openOrderCount : 0}</div>
           </div>
           <div className="kpi">
             <div className="kpi-label">Latest decision</div>
@@ -253,7 +287,56 @@ export default async function Home() {
 
         <div className="grid">
           <div className="left-stack">
-            <section className="panel" id="trades">
+            <section className="panel" id="account">
+              <div className="panel-header">
+                <div>
+                  <div className="panel-title">Alpaca paper account</div>
+                  <div className="panel-meta">Read-only. No orders are submitted in 13A.</div>
+                </div>
+                <span className={`badge ${paperAccountTone(paperAccount)}`}>{paperAccount?.configured ? "connected" : "not configured"}</span>
+              </div>
+              {paperAccount ? (
+                <>
+                  <div className="run-summary run-summary-tight">
+                    <div><span>Equity</span><strong>{money(paperAccount.summary.equity)}</strong></div>
+                    <div><span>Cash</span><strong>{money(paperAccount.summary.cash)}</strong></div>
+                    <div><span>Buying power</span><strong>{money(paperAccount.summary.buyingPower)}</strong></div>
+                    <div><span>Portfolio</span><strong>{money(paperAccount.summary.portfolioValue)}</strong></div>
+                    <div><span>Open positions</span><strong>{paperAccount.summary.openPositionCount}</strong></div>
+                    <div><span>Open orders</span><strong>{paperAccount.summary.openOrderCount}</strong></div>
+                    <div><span>Unrealized P/L</span><strong className={paperAccount.summary.unrealizedPl && paperAccount.summary.unrealizedPl < 0 ? "text-red" : "text-green"}>{signedMoney(paperAccount.summary.unrealizedPl)}</strong></div>
+                    <div><span>Live trading</span><strong className="text-red">disabled</strong></div>
+                  </div>
+                  {paperAccount.positions.length > 0 ? (
+                    <div className="signal-list">
+                      {paperAccount.positions.slice(0, 6).map((position) => (
+                        <article className="signal-card" key={position.symbol}>
+                          <div className="signal-head">
+                            <div>
+                              <div className="signal-title">{position.symbol} · {position.side || "position"}</div>
+                              <div className="panel-meta">qty {position.qty} · avg {money(Number(position.avg_entry_price))}</div>
+                            </div>
+                            <div className={`score ${Number(position.unrealized_pl || 0) >= 0 ? "green" : "red"}`}>{money(Number(position.market_value || 0))}</div>
+                          </div>
+                          <div className="market-strip">
+                            <span>current {money(Number(position.current_price || 0))}</span>
+                            <span>p/l {signedMoney(Number(position.unrealized_pl || 0))}</span>
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+                  ) : <div className="empty-state">No open Alpaca paper positions.</div>}
+                  <div className="market-strip" style={{ padding: "0 13px 12px" }}>
+                    <a className="badge blue" href="/api/paper/account">Account JSON</a>
+                    <a className="badge blue" href="/api/paper/report">Paper report</a>
+                  </div>
+                </>
+              ) : (
+                <div className="empty-state">Alpaca paper account unavailable.</div>
+              )}
+            </section>
+
+            <section className="panel" id="trades" style={{ marginTop: 14 }}>
               <div className="panel-header">
                 <div>
                   <div className="panel-title">Paper trades</div>
