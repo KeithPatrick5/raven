@@ -242,6 +242,39 @@ export async function ensureRavenTables() {
     on raw_federal_register_docs (category, publication_date desc)
   `;
 
+  await sql`
+    create table if not exists raw_federal_register_observations (
+      id bigserial primary key,
+      source_id text not null unique,
+      document_number text not null,
+      ticker text not null,
+      matched_term text not null,
+      category text not null,
+      document_type text,
+      publication_date date,
+      title text not null,
+      summary text not null,
+      source_url text,
+      agencies jsonb not null default '[]'::jsonb,
+      visible_signal boolean not null default false,
+      suppression_reason text,
+      raw_payload jsonb not null default '{}'::jsonb,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now()
+    )
+  `;
+
+  await sql`
+    create index if not exists raw_federal_register_observations_ticker_date_idx
+    on raw_federal_register_observations (ticker, publication_date desc)
+  `;
+
+  await sql`
+    create index if not exists raw_federal_register_observations_visible_idx
+    on raw_federal_register_observations (visible_signal, publication_date desc)
+  `;
+
+
 
   await sql`
     create table if not exists raw_fda_observations (
