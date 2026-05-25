@@ -640,3 +640,53 @@ h1 {
   background: rgba(3, 5, 8, 0.42);
   padding: 12px;
 }
+
+.paper-account-panel {
+  margin-bottom: 14px;
+}
+
+.account-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1px;
+  background: var(--line-soft);
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.account-metric {
+  background: rgba(11, 16, 22, 0.92);
+  padding: 12px 13px;
+  min-width: 0;
+}
+
+.account-metric span {
+  display: block;
+  color: var(--muted);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+
+.account-metric strong {
+  display: block;
+  font-size: 17px;
+  letter-spacing: -0.03em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.account-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px 13px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.account-warning {
+  color: var(--amber);
+  font-size: 12px;
+  padding: 12px 13px;
+}

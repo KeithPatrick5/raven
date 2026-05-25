@@ -1,3 +1,4 @@
+import { getPaperAccountSnapshot } from "@/lib/alpaca";
 import { getLatestPaperDecisions, getLatestPaperTrades } from "@/lib/paper";
 import { getLatestPipelineRuns } from "@/lib/pipelineRuns";
 import { getActiveRadarTickers } from "@/lib/radar";
@@ -56,6 +57,23 @@ function parseList(value: Jsonish): string[] {
   } catch {
     return [];
   }
+}
+
+function money(value: number | null | undefined) {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "--";
+  return `$${value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function signedMoney(value: number | null | undefined) {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "--";
+  const prefix = value > 0 ? "+" : "";
+  return `${prefix}${money(value)}`;
+}
+
+function signedPct(value: number | null | undefined) {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "--";
+  const prefix = value > 0 ? "+" : "";
+  return `${prefix}${value.toFixed(2)}%`;
 }
 
 function seconds(ms: number) {
@@ -132,6 +150,14 @@ async function safeSourceHealth() {
   }
 }
 
+async function safePaperAccount() {
+  try {
+    return await getPaperAccountSnapshot();
+  } catch {
+    return null;
+  }
+}
+
 async function safePaperTrades() {
   try {
     return await getLatestPaperTrades(6);
@@ -165,10 +191,11 @@ async function safeRadarTickers() {
 }
 
 export default async function Home() {
-  const [signals, signalEvents, sourceHealth, paperTrades, paperDecisions, pipelineRuns, radarTickers] = await Promise.all([
+  const [signals, signalEvents, sourceHealth, paperAccount, paperTrades, paperDecisions, pipelineRuns, radarTickers] = await Promise.all([
     safeSignals(),
     safeSignalEvents(),
     safeSourceHealth(),
+    safePaperAccount(),
     safePaperTrades(),
     safePaperDecisions(),
     safePipelineRuns(),
@@ -184,6 +211,7 @@ export default async function Home() {
   const latestDecision = paperDecisions[0];
   const latestErrors = latestRun?.steps_failed || 0;
   const lastRunOutcome = latestRun ? runOutcome(latestRun) : "none";
+  const paperSummary = paperAccount?.summary;
 
   return (
     <main className="raven-shell">
@@ -198,6 +226,7 @@ export default async function Home() {
 
         <nav className="nav" aria-label="Raven navigation">
           <a className="nav-item active" href="#overview">Overview <span className="nav-pill">live</span></a>
+          <a className="nav-item" href="#paper-account">Account <span className="nav-pill">paper</span></a>
           <a className="nav-item" href="#trades">Trades <span className="nav-pill">{openTrades.length}</span></a>
           <a className="nav-item" href="#signals">Signals <span className="nav-pill">{signalEvents.length || signals.length}</span></a>
           <a className="nav-item" href="#radar">Radar <span className="nav-pill">{radarTickers.length}</span></a>
@@ -235,9 +264,9 @@ export default async function Home() {
             <div className="kpi-note">{latestRun ? `${shortDate(latestRun.created_at)} · ${seconds(latestRun.duration_ms)}` : "No runs yet"}</div>
           </div>
           <div className="kpi">
-            <div className="kpi-label">Open trades</div>
-            <div className="kpi-value">{openTrades.length}</div>
-            <div className="kpi-note">{closedTrades.length} closed</div>
+            <div className="kpi-label">Paper equity</div>
+            <div className="kpi-value">{paperSummary ? money(paperSummary.equity) : "--"}</div>
+            <div className="kpi-note">cash {paperSummary ? money(paperSummary.cash) : "--"}</div>
           </div>
           <div className="kpi">
             <div className="kpi-label">Latest decision</div>
@@ -253,6 +282,52 @@ export default async function Home() {
 
         <div className="grid">
           <div className="left-stack">
+
+            <section className="panel paper-account-panel" id="paper-account">
+              <div className="panel-header">
+                <div>
+                  <div className="panel-title">Paper account</div>
+                  <div className="panel-meta">Alpaca paper · read-only · live trading disabled</div>
+                </div>
+                <span className={`badge ${paperAccount?.ok ? "green" : "amber"}`}>{paperAccount?.ok ? "connected" : "check"}</span>
+              </div>
+              <div className="account-grid">
+                <div className="account-metric">
+                  <span>Equity</span>
+                  <strong>{paperSummary ? money(paperSummary.equity) : "--"}</strong>
+                </div>
+                <div className="account-metric">
+                  <span>Cash</span>
+                  <strong>{paperSummary ? money(paperSummary.cash) : "--"}</strong>
+                </div>
+                <div className="account-metric">
+                  <span>Buying power</span>
+                  <strong>{paperSummary ? money(paperSummary.buyingPower) : "--"}</strong>
+                </div>
+                <div className="account-metric">
+                  <span>Today P/L</span>
+                  <strong className={paperSummary && (paperSummary.todayPl || 0) < 0 ? "text-red" : "text-green"}>{paperSummary ? `${signedMoney(paperSummary.todayPl)} / ${signedPct(paperSummary.todayPlPercent)}` : "--"}</strong>
+                </div>
+                <div className="account-metric">
+                  <span>Open positions</span>
+                  <strong>{paperSummary?.openPositions ?? "--"}</strong>
+                </div>
+                <div className="account-metric">
+                  <span>Open orders</span>
+                  <strong>{paperSummary?.openOrders ?? "--"}</strong>
+                </div>
+              </div>
+              <div className="account-actions">
+                <a className="ghost-button" href="/api/paper/report">Readable report</a>
+                <a className="ghost-button" href="/api/paper/account">Account JSON</a>
+                <a className="ghost-button" href="/api/paper/positions">Positions</a>
+                <a className="ghost-button" href="/api/paper/orders">Orders</a>
+              </div>
+              {paperAccount?.errors?.length ? (
+                <div className="account-warning">{paperAccount.errors[0].error}</div>
+              ) : null}
+            </section>
+
             <section className="panel" id="trades">
               <div className="panel-header">
                 <div>

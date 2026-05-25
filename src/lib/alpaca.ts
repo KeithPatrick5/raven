@@ -1,5 +1,82 @@
 import { db, ensureRavenTables, hasDatabase } from "@/lib/db";
 
+
+export type AlpacaAccountMode = "paper" | "live";
+
+export type AlpacaAccount = {
+  id: string;
+  account_number: string | null;
+  status: string;
+  currency: string;
+  cash: string;
+  buying_power: string;
+  portfolio_value: string;
+  equity: string;
+  last_equity: string;
+  long_market_value: string;
+  short_market_value: string;
+  pattern_day_trader?: boolean;
+  trading_blocked?: boolean;
+  transfers_blocked?: boolean;
+  account_blocked?: boolean;
+  created_at?: string;
+};
+
+export type AlpacaPosition = {
+  asset_id?: string;
+  symbol: string;
+  exchange?: string;
+  asset_class?: string;
+  qty: string;
+  side: string;
+  market_value: string;
+  cost_basis: string;
+  unrealized_pl: string;
+  unrealized_plpc: string;
+  current_price: string;
+  avg_entry_price: string;
+};
+
+export type AlpacaOrder = {
+  id: string;
+  symbol: string;
+  asset_class?: string;
+  qty: string | null;
+  notional?: string | null;
+  side: string;
+  type: string;
+  time_in_force: string;
+  status: string;
+  filled_qty?: string;
+  filled_avg_price?: string | null;
+  submitted_at?: string;
+  filled_at?: string | null;
+  canceled_at?: string | null;
+};
+
+export type PaperAccountSnapshot = {
+  ok: boolean;
+  mode: AlpacaAccountMode;
+  liveTrading: "disabled";
+  alpaca: "configured" | "not_configured";
+  account: AlpacaAccount | null;
+  positions: AlpacaPosition[];
+  openOrders: AlpacaOrder[];
+  recentOrders: AlpacaOrder[];
+  summary: {
+    equity: number | null;
+    cash: number | null;
+    buyingPower: number | null;
+    portfolioValue: number | null;
+    longMarketValue: number | null;
+    openPositions: number;
+    openOrders: number;
+    todayPl: number | null;
+    todayPlPercent: number | null;
+  };
+  errors: Array<{ error: string }>;
+};
+
 export type AlpacaConfirmation = {
   id: number;
   summary_id: number;
@@ -47,6 +124,131 @@ function apiSecretKey() {
 
 export function hasAlpacaProvider() {
   return Boolean(apiKeyId() && apiSecretKey());
+}
+
+
+function tradingBaseUrl(mode: AlpacaAccountMode = "paper") {
+  const paperUrl = process.env.ALPACA_PAPER_TRADING_BASE_URL || process.env.ALPACA_PAPER_BASE_URL || "https://paper-api.alpaca.markets";
+  const liveUrl = process.env.ALPACA_LIVE_TRADING_BASE_URL || process.env.ALPACA_LIVE_BASE_URL || "https://api.alpaca.markets";
+  const selected = mode === "live" ? liveUrl : paperUrl;
+  return selected.replace(/\/$/, "");
+}
+
+async function alpacaTradingRequest<T>(path: string, mode: AlpacaAccountMode = "paper"): Promise<T> {
+  if (!hasAlpacaProvider()) {
+    throw new Error("ALPACA_API_KEY_ID and ALPACA_API_SECRET_KEY are not configured.");
+  }
+
+  const response = await fetch(`${tradingBaseUrl(mode)}/v2${path}`, {
+    headers: {
+      "APCA-API-KEY-ID": apiKeyId(),
+      "APCA-API-SECRET-KEY": apiSecretKey(),
+      Accept: "application/json"
+    },
+    cache: "no-store"
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`Alpaca trading request failed: ${response.status} ${body.slice(0, 180)}`);
+  }
+
+  return response.json() as Promise<T>;
+}
+
+function moneyNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim() && Number.isFinite(Number(value))) return Number(value);
+  return null;
+}
+
+function accountSummary(account: AlpacaAccount | null, positions: AlpacaPosition[], openOrders: AlpacaOrder[]) {
+  const equity = moneyNumber(account?.equity);
+  const lastEquity = moneyNumber(account?.last_equity);
+  const todayPl = equity !== null && lastEquity !== null ? equity - lastEquity : null;
+  const todayPlPercent = todayPl !== null && lastEquity !== null && lastEquity !== 0 ? (todayPl / lastEquity) * 100 : null;
+
+  return {
+    equity: round(equity, 2),
+    cash: round(moneyNumber(account?.cash), 2),
+    buyingPower: round(moneyNumber(account?.buying_power), 2),
+    portfolioValue: round(moneyNumber(account?.portfolio_value), 2),
+    longMarketValue: round(moneyNumber(account?.long_market_value), 2),
+    openPositions: positions.length,
+    openOrders: openOrders.length,
+    todayPl: round(todayPl, 2),
+    todayPlPercent: round(todayPlPercent, 2)
+  };
+}
+
+export async function getAlpacaAccount(mode: AlpacaAccountMode = "paper") {
+  return alpacaTradingRequest<AlpacaAccount>("/account", mode);
+}
+
+export async function getAlpacaPositions(mode: AlpacaAccountMode = "paper") {
+  return alpacaTradingRequest<AlpacaPosition[]>("/positions", mode);
+}
+
+export async function getAlpacaOrders(mode: AlpacaAccountMode = "paper", status: "open" | "closed" | "all" = "open", limit = 25) {
+  const params = new URLSearchParams({
+    status,
+    limit: String(Math.max(1, Math.min(100, Math.floor(limit)))),
+    direction: "desc"
+  });
+
+  return alpacaTradingRequest<AlpacaOrder[]>(`/orders?${params.toString()}`, mode);
+}
+
+export async function getPaperAccountSnapshot(): Promise<PaperAccountSnapshot> {
+  if (!hasAlpacaProvider()) {
+    return {
+      ok: false,
+      mode: "paper",
+      liveTrading: "disabled",
+      alpaca: "not_configured",
+      account: null,
+      positions: [],
+      openOrders: [],
+      recentOrders: [],
+      summary: accountSummary(null, [], []),
+      errors: [{ error: "ALPACA_API_KEY_ID and ALPACA_API_SECRET_KEY are not configured." }]
+    };
+  }
+
+  try {
+    const [account, positions, openOrders, recentOrders] = await Promise.all([
+      getAlpacaAccount("paper"),
+      getAlpacaPositions("paper"),
+      getAlpacaOrders("paper", "open", 50),
+      getAlpacaOrders("paper", "all", 25)
+    ]);
+
+    return {
+      ok: true,
+      mode: "paper",
+      liveTrading: "disabled",
+      alpaca: "configured",
+      account,
+      positions,
+      openOrders,
+      recentOrders,
+      summary: accountSummary(account, positions, openOrders),
+      errors: []
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      mode: "paper",
+      liveTrading: "disabled",
+      alpaca: "configured",
+      account: null,
+      positions: [],
+      openOrders: [],
+      recentOrders: [],
+      summary: accountSummary(null, [], []),
+      errors: [{ error: error instanceof Error ? error.message : "Unknown Alpaca paper account failure" }]
+    };
+  }
 }
 
 function marketDataBaseUrl() {
