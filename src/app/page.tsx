@@ -1,5 +1,6 @@
 import { getAlpacaPaperSnapshot, type PaperAccountSnapshot } from "@/lib/alpacaTrading";
 import { getLatestPaperDecisions, getLatestPaperTrades } from "@/lib/paper";
+import { getPaperTradePlan } from "@/lib/paperPlanner";
 import { getLatestPipelineRuns } from "@/lib/pipelineRuns";
 import { getActiveRadarTickers } from "@/lib/radar";
 import { getLatestScoredSignals } from "@/lib/scoring";
@@ -175,6 +176,14 @@ async function safePaperDecisions() {
   }
 }
 
+async function safePaperPlan() {
+  try {
+    return await getPaperTradePlan(5);
+  } catch {
+    return null;
+  }
+}
+
 async function safePipelineRuns() {
   try {
     return await getLatestPipelineRuns(6);
@@ -192,8 +201,9 @@ async function safeRadarTickers() {
 }
 
 export default async function Home() {
-  const [paperAccount, signals, signalEvents, sourceHealth, paperTrades, paperDecisions, pipelineRuns, radarTickers] = await Promise.all([
+  const [paperAccount, paperPlan, signals, signalEvents, sourceHealth, paperTrades, paperDecisions, pipelineRuns, radarTickers] = await Promise.all([
     safeAlpacaPaperAccount(),
+    safePaperPlan(),
     safeSignals(),
     safeSignalEvents(),
     safeSourceHealth(),
@@ -227,6 +237,7 @@ export default async function Home() {
         <nav className="nav" aria-label="Raven navigation">
           <a className="nav-item active" href="#overview">Overview <span className="nav-pill">live</span></a>
           <a className="nav-item" href="#account">Paper account <span className="nav-pill">read</span></a>
+          <a className="nav-item" href="#plan">Trade plan <span className="nav-pill">{paperPlan?.eligible || 0}</span></a>
           <a className="nav-item" href="#trades">Trades <span className="nav-pill">{openTrades.length}</span></a>
           <a className="nav-item" href="#signals">Signals <span className="nav-pill">{signalEvents.length || signals.length}</span></a>
           <a className="nav-item" href="#radar">Radar <span className="nav-pill">{radarTickers.length}</span></a>
@@ -333,6 +344,62 @@ export default async function Home() {
                 </>
               ) : (
                 <div className="empty-state">Alpaca paper account unavailable.</div>
+              )}
+            </section>
+
+            <section className="panel" id="plan" style={{ marginTop: 14 }}>
+              <div className="panel-header">
+                <div>
+                  <div className="panel-title">Paper trade planner</div>
+                  <div className="panel-meta">Plan only. No orders submitted.</div>
+                </div>
+                {paperPlan ? <span className={`badge ${paperPlan.eligible > 0 ? "green" : "amber"}`}>{paperPlan.eligible} eligible</span> : <span className="badge amber">offline</span>}
+              </div>
+              {paperPlan ? (
+                <>
+                  <div className="run-summary run-summary-tight">
+                    <div><span>Mode</span><strong>plan only</strong></div>
+                    <div><span>Reviewed</span><strong>{paperPlan.candidatesReviewed}</strong></div>
+                    <div><span>Eligible</span><strong className={paperPlan.eligible > 0 ? "text-green" : "text-amber"}>{paperPlan.eligible}</strong></div>
+                    <div><span>Rejected</span><strong>{paperPlan.rejected}</strong></div>
+                    <div><span>Max size</span><strong>{money(paperPlan.riskLimits.maxNotionalPerTrade)}</strong></div>
+                    <div><span>Per trade</span><strong>{paperPlan.riskLimits.maxPositionPct}% equity</strong></div>
+                  </div>
+                  {paperPlan.plans.length > 0 ? (
+                    <div className="signal-list">
+                      {paperPlan.plans.slice(0, 4).map((plan) => (
+                        <article className="signal-card" key={`${plan.ticker}-${plan.accessionNumber}`}>
+                          <div className="signal-head">
+                            <div>
+                              <div className="signal-title">{plan.ticker} · {plan.wouldTrade ? "eligible" : "reject"}</div>
+                              <div className="panel-meta">{cleanLabel(plan.action)} · {plan.form}</div>
+                            </div>
+                            <div className={`score ${scoreTone(plan.score)}`}>{plan.score}</div>
+                          </div>
+                          <p className="signal-copy">{plan.summary}</p>
+                          {plan.wouldTrade ? (
+                            <div className="market-strip">
+                              <span>buy {money(plan.suggestedNotional)}</span>
+                              <span>{plan.estimatedShares ?? "--"} shares</span>
+                              <span>stop {money(plan.stopPrice)}</span>
+                              <span>target {money(plan.targetPrice)}</span>
+                            </div>
+                          ) : (
+                            <div className="market-strip">
+                              {plan.rejectCodes.slice(0, 4).map((reject) => <span key={reject}>{cleanLabel(reject)}</span>)}
+                            </div>
+                          )}
+                        </article>
+                      ))}
+                    </div>
+                  ) : <div className="empty-state">No scored candidates available for planning.</div>}
+                  <div className="market-strip" style={{ padding: "0 13px 12px" }}>
+                    <a className="badge blue" href="/api/paper/plan">Plan JSON</a>
+                    <a className="badge blue" href="/api/paper/plan/report">Plan report</a>
+                  </div>
+                </>
+              ) : (
+                <div className="empty-state">Paper planner unavailable.</div>
               )}
             </section>
 
