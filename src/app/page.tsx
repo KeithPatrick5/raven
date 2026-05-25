@@ -135,6 +135,7 @@ export default async function Home() {
   const latestSignal = signals[0];
   const latestDecision = paperDecisions[0];
   const latestErrors = latestRun?.steps_failed || 0;
+  const lastRunOutcome = latestRun ? runOutcome(latestRun) : "none";
 
   return (
     <main className="raven-shell">
@@ -166,11 +167,11 @@ export default async function Home() {
       <section className="main">
         <div className="topbar" id="overview">
           <div>
-            <div className="eyebrow">Command</div>
-            <h1>Raven</h1>
+            <div className="eyebrow">Raven command</div>
+            <h1>Trading engine</h1>
           </div>
           <div className="top-actions">
-            <a className="badge green" href="/api/run/pipeline">Run</a>
+            <a className="badge green" href="/api/run/pipeline">Run now</a>
             <form action="/api/logout" method="post">
               <button className="ghost-button" type="submit">Lock</button>
             </form>
@@ -179,8 +180,8 @@ export default async function Home() {
 
         <div className="kpi-row">
           <div className="kpi">
-            <div className="kpi-label">Status</div>
-            <div className="kpi-value">{latestRun ? latestRun.status : "none"}</div>
+            <div className="kpi-label">Last run</div>
+            <div className={`kpi-value ${latestErrors ? "text-red" : "text-green"}`}>{latestRun ? lastRunOutcome : "none"}</div>
             <div className="kpi-note">{latestRun ? `${shortDate(latestRun.created_at)} · ${seconds(latestRun.duration_ms)}` : "No runs yet"}</div>
           </div>
           <div className="kpi">
@@ -189,7 +190,7 @@ export default async function Home() {
             <div className="kpi-note">{closedTrades.length} closed</div>
           </div>
           <div className="kpi">
-            <div className="kpi-label">Latest call</div>
+            <div className="kpi-label">Latest decision</div>
             <div className="kpi-value">{latestDecision ? latestDecision.decision : "--"}</div>
             <div className="kpi-note">{latestDecision ? `${latestDecision.ticker} · ${latestDecision.final_score}/100` : "No decisions"}</div>
           </div>
@@ -282,32 +283,36 @@ export default async function Home() {
             <section className="panel" id="runs">
               <div className="panel-header">
                 <div>
-                  <div className="panel-title">Last run</div>
+                  <div className="panel-title">Cron heartbeat</div>
                   <div className="panel-meta">{latestRun ? shortDate(latestRun.created_at) : "No run"}</div>
                 </div>
                 {latestRun ? <span className={`badge ${runToneFromOutcome(runOutcome(latestRun))}`}>{runLine(latestRun)}</span> : <span className="badge amber">none</span>}
               </div>
               {latestRun ? (
                 <>
-                  <div className="run-summary">
+                  <div className="run-summary run-summary-tight">
                     <div>
-                      <span>Status</span>
-                      <strong className={latestRun.steps_failed ? "text-red" : "text-green"}>{latestRun.status}</strong>
+                      <span>Outcome</span>
+                      <strong className={latestRun.steps_failed ? "text-red" : runToneFromOutcome(runOutcome(latestRun)) === "green" ? "text-green" : "text-amber"}>{runLine(latestRun)}</strong>
                     </div>
                     <div>
-                      <span>Duration</span>
+                      <span>Runtime</span>
                       <strong>{seconds(latestRun.duration_ms)}</strong>
                     </div>
                     <div>
-                      <span>Filings</span>
+                      <span>SEC</span>
                       <strong>{latestRun.sec_filings_found} found · {latestRun.sec_filings_saved} new</strong>
                     </div>
                     <div>
-                      <span>AI / market</span>
-                      <strong>{latestRun.ai_classified} classified · {latestRun.alpaca_confirmed} confirmed</strong>
+                      <span>AI</span>
+                      <strong>{latestRun.ai_classified} classified</strong>
                     </div>
                     <div>
-                      <span>Signal result</span>
+                      <span>Market</span>
+                      <strong>{latestRun.alpaca_confirmed} confirmed</strong>
+                    </div>
+                    <div>
+                      <span>Signals</span>
                       <strong>{latestRun.signals_scored} scored · {latestRun.paper_trades_rejected} rejected</strong>
                     </div>
                     <div>
@@ -329,7 +334,7 @@ export default async function Home() {
               <div className="panel-header">
                 <div>
                   <div className="panel-title">Run history</div>
-                  <div className="panel-meta">Latest cron and manual runs</div>
+                  <div className="panel-meta">Recent automatic and manual runs</div>
                 </div>
               </div>
               {pipelineRuns.length > 0 ? (
@@ -340,7 +345,7 @@ export default async function Home() {
                       <div className="run-row" key={run.id}>
                         <div>
                           <div className="run-time">{shortDate(run.created_at)}</div>
-                          <div className="run-metrics">F {run.sec_filings_found}/{run.sec_filings_saved} · AI {run.ai_classified} · Score {run.signals_scored}</div>
+                          <div className="run-metrics">SEC {run.sec_filings_found}/{run.sec_filings_saved} · AI {run.ai_classified} · MKT {run.alpaca_confirmed} · Score {run.signals_scored} · Reject {run.paper_trades_rejected}</div>
                         </div>
                         <div className="run-right">
                           <span className={`badge ${runToneFromOutcome(outcome)}`}>{runLine(run)}</span>

@@ -554,3 +554,17 @@ h1 {
   font-size: 11px;
   white-space: nowrap;
 }
+
+.run-summary-tight {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.text-amber {
+  color: var(--amber);
+}
+
+@media (max-width: 720px) {
+  .run-summary-tight {
+    grid-template-columns: 1fr;
+  }
+}
