@@ -8,6 +8,7 @@ import { getLatestPipelineRuns } from "@/lib/pipelineRuns";
 import { getActiveRadarTickers } from "@/lib/radar";
 import { getLatestScoredSignals } from "@/lib/scoring";
 import { getPerformanceSnapshot, performanceWindows } from "@/lib/performance";
+import { getAiUsageSnapshot } from "@/lib/aiUsage";
 import { getLatestSignalEvents, getSignalSourceHealth } from "@/lib/signalEvents";
 import { watchlist } from "@/lib/watchlist";
 
@@ -236,8 +237,16 @@ async function safePerformanceSnapshot() {
   }
 }
 
+async function safeAiUsageSnapshot() {
+  try {
+    return await getAiUsageSnapshot("24h");
+  } catch {
+    return null;
+  }
+}
+
 export default async function Home() {
-  const [paperAccount, paperPlan, paperExecution, paperLifecycle, tradingSafety, signals, signalEvents, sourceHealth, paperTrades, paperDecisions, pipelineRuns, radarTickers, performanceSnapshot] = await Promise.all([
+  const [paperAccount, paperPlan, paperExecution, paperLifecycle, tradingSafety, signals, signalEvents, sourceHealth, paperTrades, paperDecisions, pipelineRuns, radarTickers, performanceSnapshot, aiUsageSnapshot] = await Promise.all([
     safeAlpacaPaperAccount(),
     safePaperPlan(),
     safePaperExecution(),
@@ -250,7 +259,8 @@ export default async function Home() {
     safePaperDecisions(),
     safePipelineRuns(),
     safeRadarTickers(),
-    safePerformanceSnapshot()
+    safePerformanceSnapshot(),
+    safeAiUsageSnapshot()
   ]);
 
   const latestRun = pipelineRuns[0];
@@ -267,6 +277,7 @@ export default async function Home() {
   const performanceShadows = performance?.shadows as { count: number; avgPnlPercent: number; best?: { ticker: string; pnlPercent: number; finalScore: number } | null; worst?: { ticker: string; pnlPercent: number; finalScore: number } | null; items?: Array<{ ticker: string; pnlPercent: number; finalScore: number; action: string }> } | undefined;
   const performanceRejects = performance?.rejects as { count: number; topReasons: Array<{ name: string; count: number }> } | undefined;
   const performanceOrders = performance?.orders as { submitted: number; filled: number; rejected: number; error: number } | undefined;
+  const aiUsage = aiUsageSnapshot && aiUsageSnapshot.ok ? aiUsageSnapshot as any : null;
 
   return (
     <main className="raven-shell">
@@ -282,6 +293,7 @@ export default async function Home() {
         <nav className="nav" aria-label="Raven navigation">
           <a className="nav-item active" href="#overview">Overview <span className="nav-pill">live</span></a>
           <a className="nav-item" href="#performance">Performance <span className="nav-pill">24h</span></a>
+          <a className="nav-item" href="#ai-usage">AI usage <span className="nav-pill">{aiUsage?.calls.total || 0}</span></a>
           <a className="nav-item" href="#account">Paper account <span className="nav-pill">read</span></a>
           <a className="nav-item" href="#safety">Safety <span className="nav-pill">{tradingSafety?.mode || "paper"}</span></a>
           <a className="nav-item" href="#plan">Trade plan <span className="nav-pill">{paperPlan?.eligible || 0}</span></a>
@@ -315,6 +327,29 @@ export default async function Home() {
             </form>
           </div>
         </div>
+
+
+        <section className="ai-usage-strip" id="ai-usage">
+          <div className="ai-usage-main">
+            <div>
+              <div className="eyebrow">Groq usage meter</div>
+              <div className="ai-usage-title">{aiUsage ? `${aiUsage.calls.total} calls · ${aiUsage.tokens.total.toLocaleString()} tokens` : "No Groq usage logged yet"}</div>
+            </div>
+            <div className="ai-usage-actions">
+              <a className="badge blue" href="/api/ai/usage?window=24h">Usage JSON</a>
+              <a className="badge blue" href="/api/ai/usage/report?window=24h">Usage report</a>
+            </div>
+          </div>
+          <div className="ai-usage-grid">
+            <div><span>Input</span><strong>{aiUsage ? aiUsage.tokens.input.toLocaleString() : "0"}</strong></div>
+            <div><span>Output</span><strong>{aiUsage ? aiUsage.tokens.output.toLocaleString() : "0"}</strong></div>
+            <div><span>Avg/call</span><strong>{aiUsage ? aiUsage.tokens.avgTotalPerCall.toLocaleString() : "0"}</strong></div>
+            <div><span>Failed</span><strong className={aiUsage?.calls.failed ? "text-red" : "text-green"}>{aiUsage ? aiUsage.calls.failed : 0}</strong></div>
+            <div><span>Est. cost</span><strong>{aiUsage ? aiUsage.cost.display : "$0.0000"}</strong></div>
+          </div>
+          <div className="usage-meter"><span style={{ width: `${aiUsage ? Math.min(100, Math.max(4, aiUsage.calls.successRate)) : 4}%` }} /></div>
+          <div className="ai-usage-note">Tracking only. Raven does not enforce Groq limits in this phase.</div>
+        </section>
 
         <div className="kpi-row">
           <div className="kpi">

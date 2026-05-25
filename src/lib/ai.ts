@@ -1,3 +1,5 @@
+import { estimateTokensFromText, logAiUsageEvent } from "@/lib/aiUsage";
+
 export type SecFilingClassification = {
   direction: "bullish" | "bearish" | "neutral" | "mixed";
   category: string;
@@ -88,6 +90,11 @@ export async function classifySecFilingWithAi(input: {
 
   const prompt = `You are Raven, a cynical market filing analyst. Classify this public SEC filing for a private signal scanner. Do not hype trades. Separate useful public signal from noise. Return JSON only.\n\nRequired JSON shape:\n{\n  "direction": "bullish | bearish | neutral | mixed",\n  "category": "short category like insider_buy, dilution_risk, earnings, material_agreement, ownership, routine",\n  "risk_level": "low | medium | high | extreme",\n  "tradeability": 0-100,\n  "summary": "plain English filing summary in 1-2 short sentences",\n  "bull_case": "short bull case",\n  "bear_case": "short bear case",\n  "verdict": "ignore | watch | paper_trade_candidate | avoid",\n  "confirmation_needed": ["price/volume or filing confirmations needed"],\n  "avoid_if": ["conditions that invalidate or make it dangerous"]\n}\n\nFiling metadata:\nTicker: ${input.ticker}\nCompany: ${input.companyName || "unknown"}\nForm: ${input.form}\nFiling date: ${input.filingDate || "unknown"}\nReport date: ${input.reportDate || "unknown"}\nAccession: ${input.accessionNumber}\nDocument URL: ${input.primaryDocumentUrl || "none"}\nRaven priority: ${input.priority || "unknown"} (${input.priorityScore ?? "n/a"}/100)\nRaven materiality: ${input.materiality || "unknown"}\nRaven form family: ${input.formFamily || "unknown"}\n\nClassification rules:\n- Routine Form 4 tax/RSU/10b5-1 sales should usually be category routine_insider_noise, verdict ignore, tradeability 0-25.\n- Real open-market CEO/CFO insider buys can be category insider_buy and should score higher if material.\n- 8-K material agreements, 13D activism, S-3/S-1/424B5 offerings, late filings, delisting, defaults, auditor changes, and going-concern language matter more than routine insider paperwork.\n- If a filing is legally important but not tradeable yet, classify it as watch, not paper_trade_candidate.\n\nFiling text excerpt:\n${filingText}`;
 
+  const systemMessage = "You return strict JSON only. You are skeptical, concise, and focused on public-market signal quality. You never claim certainty.";
+  const estimatedInputTokens = estimateTokensFromText(`${systemMessage}
+${prompt}`);
+  const startedAt = Date.now();
+
   const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -101,8 +108,7 @@ export async function classifySecFilingWithAi(input: {
       messages: [
         {
           role: "system",
-          content:
-            "You return strict JSON only. You are skeptical, concise, and focused on public-market signal quality. You never claim certainty."
+          content: systemMessage
         },
         { role: "user", content: prompt }
       ]
@@ -111,11 +117,35 @@ export async function classifySecFilingWithAi(input: {
 
   if (!response.ok) {
     const body = await response.text();
+    await logAiUsageEvent({
+      model,
+      route: "classify_sec_filing",
+      purpose: "sec_filing_classification",
+      success: false,
+      statusCode: response.status,
+      estimatedInputTokens,
+      estimatedOutputTokens: 0,
+      durationMs: Date.now() - startedAt,
+      errorMessage: body.slice(0, 500),
+      metadata: {
+        ticker: input.ticker,
+        form: input.form,
+        accessionNumber: input.accessionNumber
+      }
+    }).catch(() => null);
     throw new Error(`Groq classification failed: ${response.status} ${body.slice(0, 300)}`);
   }
 
   const payload = (await response.json()) as {
     choices?: Array<{ message?: { content?: string } }>;
+    usage?: {
+      prompt_tokens?: number;
+      completion_tokens?: number;
+      total_tokens?: number;
+      prompt_time?: number;
+      completion_time?: number;
+      total_time?: number;
+    };
   };
 
   const content = payload.choices?.[0]?.message?.content;
@@ -125,6 +155,26 @@ export async function classifySecFilingWithAi(input: {
 
   const parsed = JSON.parse(cleanJson(content)) as Record<string, unknown>;
   const classification = normalizeClassification(parsed);
+
+  await logAiUsageEvent({
+    model,
+    route: "classify_sec_filing",
+    purpose: "sec_filing_classification",
+    success: true,
+    statusCode: response.status,
+    inputTokens: payload.usage?.prompt_tokens || 0,
+    outputTokens: payload.usage?.completion_tokens || 0,
+    totalTokens: payload.usage?.total_tokens || 0,
+    estimatedInputTokens,
+    estimatedOutputTokens: estimateTokensFromText(content),
+    durationMs: Date.now() - startedAt,
+    metadata: {
+      ticker: input.ticker,
+      form: input.form,
+      accessionNumber: input.accessionNumber,
+      usage: payload.usage || null
+    }
+  }).catch(() => null);
 
   return { classification, raw: parsed, model };
 }
