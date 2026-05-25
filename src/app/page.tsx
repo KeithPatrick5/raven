@@ -287,7 +287,7 @@ export default async function Home() {
               <div className="panel-header">
                 <div>
                   <div className="panel-title">Paper account</div>
-                  <div className="panel-meta">Alpaca paper · read-only · live trading disabled</div>
+                  <div className="panel-meta">Alpaca paper · execution gated · live trading disabled</div>
                 </div>
                 <span className={`badge ${paperAccount?.ok ? "green" : "amber"}`}>{paperAccount?.ok ? "connected" : "check"}</span>
               </div>
@@ -332,9 +332,9 @@ export default async function Home() {
               <div className="panel-header">
                 <div>
                   <div className="panel-title">Paper trades</div>
-                  <div className="panel-meta">Open and closed</div>
+                  <div className="panel-meta">pending_entry · open · closed · rejected</div>
                 </div>
-                <span className="badge green">{openTrades.length} open</span>
+                <span className="badge green">{openTrades.length} active</span>
               </div>
               {paperTrades.length > 0 ? (
                 <div className="signal-list">
@@ -349,6 +349,8 @@ export default async function Home() {
                       </div>
                       <div className="market-strip">
                         <span>entry {trade.entry_price}</span>
+                        {trade.notional ? <span>notional {money(Number(trade.notional))}</span> : null}
+                        {trade.alpaca_order_status ? <span>order {trade.alpaca_order_status}</span> : null}
                         <span>stop {trade.stop_price}</span>
                         <span>target {trade.target_price}</span>
                         {trade.exit_price ? <span>exit {trade.exit_price}</span> : null}

@@ -1,4 +1,4 @@
-import { getLatestAlpacaSnapshot, hasAlpacaProvider } from "@/lib/alpaca";
+import { createAlpacaPaperOrder, getAlpacaAccount, getAlpacaOrders, getAlpacaPositions, getLatestAlpacaSnapshot, hasAlpacaProvider } from "@/lib/alpaca";
 import { db, ensureRavenTables, hasDatabase } from "@/lib/db";
 import { hasTelegramConfig, sendTelegramMessage } from "@/lib/telegram";
 
@@ -43,6 +43,14 @@ type PaperTrade = {
   close_reason?: string | null;
   outcome?: string | null;
   pnl_percent?: number | null;
+  lifecycle_status?: string | null;
+  alpaca_order_id?: string | null;
+  alpaca_order_status?: string | null;
+  notional?: number | null;
+  qty?: number | null;
+  submitted_at?: string | null;
+  filled_at?: string | null;
+  expires_at?: string | null;
 };
 
 type OpenTradeRow = PaperTrade & {
@@ -50,6 +58,95 @@ type OpenTradeRow = PaperTrade & {
   stop_price: number;
   target_price: number;
 };
+
+
+function paperExecutionEnabled() {
+  return ["1", "true", "yes", "on"].includes((process.env.RAVEN_PAPER_EXECUTION_ENABLED || process.env.PAPER_TRADE_EXECUTION_ENABLED || "").toLowerCase());
+}
+
+const PAPER_MAX_OPEN_POSITIONS = Number(process.env.RAVEN_PAPER_MAX_OPEN_POSITIONS || "3");
+const PAPER_MAX_DAILY_TRADES = Number(process.env.RAVEN_PAPER_MAX_DAILY_TRADES || "3");
+const PAPER_POSITION_EQUITY_PERCENT = Number(process.env.RAVEN_PAPER_POSITION_EQUITY_PERCENT || "1");
+const PAPER_MAX_NOTIONAL = Number(process.env.RAVEN_PAPER_MAX_NOTIONAL || "2500");
+const PAPER_MIN_NOTIONAL = Number(process.env.RAVEN_PAPER_MIN_NOTIONAL || "25");
+
+function orderStatusToLifecycle(status: string | null | undefined) {
+  const normalized = (status || "").toLowerCase();
+  if (["filled", "partially_filled"].includes(normalized)) return "open";
+  if (["new", "accepted", "pending_new", "accepted_for_bidding", "calculated"].includes(normalized)) return "pending_entry";
+  if (["canceled", "expired", "rejected", "stopped", "suspended"].includes(normalized)) return normalized === "rejected" ? "rejected" : "expired";
+  return "pending_entry";
+}
+
+function toMoney(value: unknown) {
+  const parsed = asNumber(value);
+  return parsed === null ? null : roundMoney(parsed);
+}
+
+async function dailyPaperTradeCount() {
+  const sql = db();
+  const rows = await sql<Array<{ count: number | string }>>`
+    select count(*)::int as count
+    from paper_trades
+    where opened_at >= date_trunc('day', now())
+      and status in ('pending_entry', 'open', 'pending_exit', 'closed')
+  `;
+  return Number(rows[0]?.count || 0);
+}
+
+async function activePaperTradeCount() {
+  const sql = db();
+  const rows = await sql<Array<{ count: number | string }>>`
+    select count(*)::int as count
+    from paper_trades
+    where status in ('pending_entry', 'open', 'pending_exit')
+  `;
+  return Number(rows[0]?.count || 0);
+}
+
+async function accountRiskCheck(row: CandidateRow) {
+  if (!hasAlpacaProvider()) {
+    return { ok: false, reject: "alpaca_not_configured", notional: null as number | null, notes: ["Alpaca credentials are missing."] };
+  }
+
+  const [account, positions, openOrders, dailyCount, activeCount] = await Promise.all([
+    getAlpacaAccount("paper"),
+    getAlpacaPositions("paper"),
+    getAlpacaOrders("paper", "open", 50),
+    dailyPaperTradeCount(),
+    activePaperTradeCount()
+  ]);
+
+  const equity = toMoney(account.equity);
+  const buyingPower = toMoney(account.buying_power);
+  const cash = toMoney(account.cash);
+  const alreadyHeld = positions.some((position) => position.symbol.toUpperCase() === row.ticker.toUpperCase());
+  const alreadyOrdered = openOrders.some((order) => order.symbol.toUpperCase() === row.ticker.toUpperCase());
+  const maxOpen = Number.isFinite(PAPER_MAX_OPEN_POSITIONS) ? PAPER_MAX_OPEN_POSITIONS : 3;
+  const maxDaily = Number.isFinite(PAPER_MAX_DAILY_TRADES) ? PAPER_MAX_DAILY_TRADES : 3;
+  const percent = Number.isFinite(PAPER_POSITION_EQUITY_PERCENT) ? PAPER_POSITION_EQUITY_PERCENT : 1;
+  const cap = Number.isFinite(PAPER_MAX_NOTIONAL) ? PAPER_MAX_NOTIONAL : 2500;
+  const min = Number.isFinite(PAPER_MIN_NOTIONAL) ? PAPER_MIN_NOTIONAL : 25;
+  const base = equity === null ? null : roundMoney(equity * (percent / 100));
+  const notional = base === null ? null : Math.max(min, Math.min(base, cap));
+  const notes = [
+    `Equity ${equity ?? "unknown"}.`,
+    `Buying power ${buyingPower ?? "unknown"}.`,
+    `Paper order size ${notional ?? "unknown"}.`,
+    `Active paper trades ${activeCount}/${maxOpen}.`,
+    `Daily paper trades ${dailyCount}/${maxDaily}.`
+  ];
+
+  if (equity === null || buyingPower === null || notional === null) return { ok: false, reject: "account_values_unavailable", notional, notes };
+  if (notional > buyingPower) return { ok: false, reject: "insufficient_buying_power", notional, notes };
+  if (activeCount >= maxOpen) return { ok: false, reject: "max_open_positions_reached", notional, notes };
+  if (dailyCount >= maxDaily) return { ok: false, reject: "max_daily_trades_reached", notional, notes };
+  if (alreadyHeld) return { ok: false, reject: "position_already_open_in_alpaca", notional, notes };
+  if (alreadyOrdered) return { ok: false, reject: "open_order_already_exists_in_alpaca", notional, notes };
+  if (cash !== null && notional > cash && buyingPower <= cash) return { ok: false, reject: "cash_limit_reached", notional, notes };
+
+  return { ok: true, reject: null, notional, notes };
+}
 
 function asNumber(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) return value;
@@ -110,6 +207,8 @@ function decision(row: CandidateRow) {
   if (!["liquid", "active"].includes(liquidity)) rejects.push("liquidity_not_strong_enough");
   if (!side) rejects.push("long_only_engine_rejects_bearish_or_neutral_signal");
   if (!entry) rejects.push("missing_entry_price");
+  if (row.action === "dilution_watch" || row.action === "shelf_watch") rejects.push("dilution_watch_not_long_trade");
+  if ((row.risk_flags || []).some((flag) => String(flag).toLowerCase().includes("dilution") || String(flag).toLowerCase().includes("offering"))) rejects.push("dilution_or_offering_risk");
 
   return {
     shouldOpen: rejects.length === 0,
@@ -213,10 +312,37 @@ async function openTrade(row: CandidateRow) {
   const sql = db();
   const plan = planFor(row);
   const verdict = decision(row);
-  const reason = [...verdict.reasons, "Raven opened this as a paper trade only. Live trading remains disabled."].join(" ");
+  const executionEnabled = paperExecutionEnabled();
+  const risk = executionEnabled ? await accountRiskCheck(row) : { ok: false, reject: "paper_execution_disabled", notional: null as number | null, notes: ["Set RAVEN_PAPER_EXECUTION_ENABLED=true to allow Alpaca paper orders."] };
+  const reason = [...verdict.reasons, ...risk.notes, "Live trading remains disabled."].join(" ");
 
   if (!plan.side || plan.entry === null || plan.stop === null || plan.target === null) {
     throw new Error("Trade plan was incomplete after eligibility passed.");
+  }
+
+  let status = "pending_entry";
+  let alpacaOrderId: string | null = null;
+  let alpacaOrderStatus: string | null = null;
+  let notional = risk.notional;
+  let qty: number | null = null;
+  let rawOrder: Record<string, unknown> | null = null;
+
+  if (!executionEnabled || !risk.ok || notional === null) {
+    status = "rejected";
+  } else {
+    const order = await createAlpacaPaperOrder({
+      symbol: row.ticker,
+      side: "buy",
+      type: "market",
+      time_in_force: "day",
+      notional: notional.toFixed(2),
+      client_order_id: `raven-paper-${row.scored_signal_id}-${Date.now()}`
+    });
+    alpacaOrderId = order.id;
+    alpacaOrderStatus = order.status;
+    status = orderStatusToLifecycle(order.status);
+    qty = asNumber(order.filled_qty) || null;
+    rawOrder = order as unknown as Record<string, unknown>;
   }
 
   const inserted = await sql<PaperTrade[]>`
@@ -227,11 +353,19 @@ async function openTrade(row: CandidateRow) {
       ticker,
       side,
       status,
+      lifecycle_status,
+      alpaca_order_id,
+      alpaca_order_status,
+      notional,
+      qty,
       entry_price,
       stop_price,
       target_price,
       final_score,
       decision_reason,
+      submitted_at,
+      filled_at,
+      expires_at,
       raw_payload
     ) values (
       ${row.scored_signal_id},
@@ -239,13 +373,23 @@ async function openTrade(row: CandidateRow) {
       ${row.accession_number},
       ${row.ticker},
       ${plan.side},
-      'open',
+      ${status},
+      ${status},
+      ${alpacaOrderId},
+      ${alpacaOrderStatus},
+      ${notional},
+      ${qty},
       ${plan.entry},
       ${plan.stop},
       ${plan.target},
       ${row.final_score},
-      ${reason},
+      ${risk.ok ? reason : `${reason} Rejected: ${risk.reject}.`},
+      ${alpacaOrderId ? new Date().toISOString() : null},
+      ${alpacaOrderStatus === "filled" ? new Date().toISOString() : null},
+      ${new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()},
       ${JSON.stringify({
+        execution: { enabled: executionEnabled, risk },
+        alpacaOrder: rawOrder,
         signal: {
           form: row.form,
           direction: row.direction,
@@ -274,12 +418,20 @@ async function openTrade(row: CandidateRow) {
       accession_number,
       side,
       status,
+      lifecycle_status,
+      alpaca_order_id,
+      alpaca_order_status,
+      notional,
+      qty,
       entry_price,
       stop_price,
       target_price,
       final_score,
       decision_reason,
-      opened_at::text as opened_at
+      opened_at::text as opened_at,
+      submitted_at::text as submitted_at,
+      filled_at::text as filled_at,
+      expires_at::text as expires_at
   `;
 
   return inserted[0] || null;
@@ -366,18 +518,32 @@ export async function runPaperTradeEngine(limit = 10) {
     try {
       const trade = await openTrade(row);
       if (trade) {
-        const telegram = await sendTradeAlertIfConfigured(trade);
-        trades.push({
-          ticker: trade.ticker,
-          accessionNumber: trade.accession_number,
-          side: trade.side,
-          status: trade.status,
-          entry: trade.entry_price,
-          stop: trade.stop_price,
-          target: trade.target_price,
-          score: trade.final_score,
-          telegram
-        });
+        if (trade.status === "rejected") {
+          rejects.push({
+            ticker: trade.ticker,
+            accessionNumber: trade.accession_number,
+            score: trade.final_score,
+            action: row.action,
+            rejects: ["paper_order_risk_check_failed"],
+            reasons: [trade.decision_reason]
+          });
+        } else {
+          const telegram = await sendTradeAlertIfConfigured(trade);
+          trades.push({
+            ticker: trade.ticker,
+            accessionNumber: trade.accession_number,
+            side: trade.side,
+            status: trade.status,
+            entry: trade.entry_price,
+            stop: trade.stop_price,
+            target: trade.target_price,
+            notional: trade.notional,
+            alpacaOrderId: trade.alpaca_order_id,
+            alpacaOrderStatus: trade.alpaca_order_status,
+            score: trade.final_score,
+            telegram
+          });
+        }
       }
     } catch (error) {
       errors.push({
@@ -426,9 +592,17 @@ async function getOpenTrades(limit: number): Promise<OpenTradeRow[]> {
       closed_at::text as closed_at,
       close_reason,
       outcome,
-      pnl_percent
+      pnl_percent,
+      lifecycle_status,
+      alpaca_order_id,
+      alpaca_order_status,
+      notional,
+      qty,
+      submitted_at::text as submitted_at,
+      filled_at::text as filled_at,
+      expires_at::text as expires_at
     from paper_trades
-    where status = 'open'
+    where status in ('pending_entry', 'open')
     order by opened_at asc
     limit ${limit}
   `;
@@ -442,13 +616,14 @@ async function closeTrade(trade: OpenTradeRow, exitPrice: number, closeReason: s
     update paper_trades
     set
       status = 'closed',
+      lifecycle_status = 'closed',
       exit_price = ${roundMoney(exitPrice)},
       closed_at = now(),
       close_reason = ${closeReason},
       outcome = ${outcome},
       pnl_percent = ${round(pnl, 2)}
     where id = ${trade.id}
-      and status = 'open'
+      and status in ('pending_entry', 'open', 'pending_exit')
     returning
       id,
       scored_signal_id,
@@ -599,6 +774,14 @@ export async function getLatestPaperTrades(limit = 10) {
     close_reason: string | null;
     outcome: string | null;
     pnl_percent: number | null;
+    lifecycle_status: string | null;
+    alpaca_order_id: string | null;
+    alpaca_order_status: string | null;
+    notional: number | null;
+    qty: number | null;
+    submitted_at: string | null;
+    filled_at: string | null;
+    expires_at: string | null;
   }>>`
     select
       ticker,
@@ -615,7 +798,15 @@ export async function getLatestPaperTrades(limit = 10) {
       closed_at::text as closed_at,
       close_reason,
       outcome,
-      pnl_percent
+      pnl_percent,
+      lifecycle_status,
+      alpaca_order_id,
+      alpaca_order_status,
+      notional,
+      qty,
+      submitted_at::text as submitted_at,
+      filled_at::text as filled_at,
+      expires_at::text as expires_at
     from paper_trades
     order by opened_at desc
     limit ${limit}

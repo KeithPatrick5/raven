@@ -54,6 +54,18 @@ export type AlpacaOrder = {
   canceled_at?: string | null;
 };
 
+
+export type AlpacaCreateOrderInput = {
+  symbol: string;
+  side: "buy" | "sell";
+  type?: "market" | "limit";
+  time_in_force?: "day" | "gtc" | "opg" | "cls" | "ioc" | "fok";
+  qty?: string;
+  notional?: string;
+  limit_price?: string;
+  client_order_id?: string;
+};
+
 export type PaperAccountSnapshot = {
   ok: boolean;
   mode: AlpacaAccountMode;
@@ -134,23 +146,30 @@ function tradingBaseUrl(mode: AlpacaAccountMode = "paper") {
   return selected.replace(/\/$/, "");
 }
 
-async function alpacaTradingRequest<T>(path: string, mode: AlpacaAccountMode = "paper"): Promise<T> {
+async function alpacaTradingRequest<T>(
+  path: string,
+  mode: AlpacaAccountMode = "paper",
+  init: { method?: "GET" | "POST" | "DELETE"; body?: unknown } = {}
+): Promise<T> {
   if (!hasAlpacaProvider()) {
     throw new Error("ALPACA_API_KEY_ID and ALPACA_API_SECRET_KEY are not configured.");
   }
 
   const response = await fetch(`${tradingBaseUrl(mode)}/v2${path}`, {
+    method: init.method || "GET",
     headers: {
       "APCA-API-KEY-ID": apiKeyId(),
       "APCA-API-SECRET-KEY": apiSecretKey(),
-      Accept: "application/json"
+      Accept: "application/json",
+      ...(init.body ? { "Content-Type": "application/json" } : {})
     },
+    body: init.body ? JSON.stringify(init.body) : undefined,
     cache: "no-store"
   });
 
   if (!response.ok) {
     const body = await response.text();
-    throw new Error(`Alpaca trading request failed: ${response.status} ${body.slice(0, 180)}`);
+    throw new Error(`Alpaca trading request failed: ${response.status} ${body.slice(0, 220)}`);
   }
 
   return response.json() as Promise<T>;
@@ -197,6 +216,21 @@ export async function getAlpacaOrders(mode: AlpacaAccountMode = "paper", status:
   });
 
   return alpacaTradingRequest<AlpacaOrder[]>(`/orders?${params.toString()}`, mode);
+}
+
+export async function createAlpacaPaperOrder(input: AlpacaCreateOrderInput) {
+  const order = {
+    symbol: input.symbol.toUpperCase(),
+    side: input.side,
+    type: input.type || "market",
+    time_in_force: input.time_in_force || "day",
+    ...(input.qty ? { qty: input.qty } : {}),
+    ...(input.notional ? { notional: input.notional } : {}),
+    ...(input.limit_price ? { limit_price: input.limit_price } : {}),
+    ...(input.client_order_id ? { client_order_id: input.client_order_id } : {})
+  };
+
+  return alpacaTradingRequest<AlpacaOrder>("/orders", "paper", { method: "POST", body: order });
 }
 
 export async function getPaperAccountSnapshot(): Promise<PaperAccountSnapshot> {
