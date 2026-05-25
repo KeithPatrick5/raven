@@ -243,6 +243,13 @@ export function buildPipelineTextReport(run: PipelineLike) {
     "----------",
     buildRavenRead(run),
     "",
+    "CRON / AI NOTE",
+    "--------------",
+    num(ai.classified) === 0 && num(sec.filingCount) > 0 && num(secStorage.saved) === 0
+      ? "AI classified 0 because SEC found filings but saved 0 new rows. Existing filings were skipped as duplicates, so there was nothing new to classify."
+      : "AI classification ran only when a new pending SEC filing needed classification.",
+    "Cron route is /api/run. Manual debug alias is /api/cron/run.",
+    "",
     "CORE RESULT",
     "-----------",
     line("SEC filings", `${num(sec.filingCount)} found, ${num(secStorage.saved)} new, ${num(secStorage.skipped)} skipped`),

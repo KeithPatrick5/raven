@@ -9,6 +9,7 @@ import { getActiveRadarTickers } from "@/lib/radar";
 import { getLatestScoredSignals } from "@/lib/scoring";
 import { getPerformanceSnapshot, performanceWindows } from "@/lib/performance";
 import { getAiUsageSnapshot } from "@/lib/aiUsage";
+import { getCronStatusSnapshot } from "@/lib/cronStatus";
 import { getLatestSignalEvents, getSignalSourceHealth } from "@/lib/signalEvents";
 import { watchlist } from "@/lib/watchlist";
 
@@ -245,8 +246,16 @@ async function safeAiUsageSnapshot() {
   }
 }
 
+async function safeCronStatus() {
+  try {
+    return await getCronStatusSnapshot();
+  } catch {
+    return null;
+  }
+}
+
 export default async function Home() {
-  const [paperAccount, paperPlan, paperExecution, paperLifecycle, tradingSafety, signals, signalEvents, sourceHealth, paperTrades, paperDecisions, pipelineRuns, radarTickers, performanceSnapshot, aiUsageSnapshot] = await Promise.all([
+  const [paperAccount, paperPlan, paperExecution, paperLifecycle, tradingSafety, signals, signalEvents, sourceHealth, paperTrades, paperDecisions, pipelineRuns, radarTickers, performanceSnapshot, aiUsageSnapshot, cronStatus] = await Promise.all([
     safeAlpacaPaperAccount(),
     safePaperPlan(),
     safePaperExecution(),
@@ -260,7 +269,8 @@ export default async function Home() {
     safePipelineRuns(),
     safeRadarTickers(),
     safePerformanceSnapshot(),
-    safeAiUsageSnapshot()
+    safeAiUsageSnapshot(),
+    safeCronStatus()
   ]);
 
   const latestRun = pipelineRuns[0];
@@ -293,6 +303,7 @@ export default async function Home() {
         <nav className="nav" aria-label="Raven navigation">
           <a className="nav-item active" href="#overview">Overview <span className="nav-pill">live</span></a>
           <a className="nav-item" href="#performance">Performance <span className="nav-pill">24h</span></a>
+          <a className="nav-item" href="#cron">Cron <span className="nav-pill">{cronStatus?.latestRun ? `#${cronStatus.latestRun.id}` : "--"}</span></a>
           <a className="nav-item" href="#ai-usage">AI usage <span className="nav-pill">{aiUsage?.calls.total || 0}</span></a>
           <a className="nav-item" href="#account">Paper account <span className="nav-pill">read</span></a>
           <a className="nav-item" href="#safety">Safety <span className="nav-pill">{tradingSafety?.mode || "paper"}</span></a>
@@ -349,6 +360,38 @@ export default async function Home() {
           </div>
           <div className="usage-meter"><span style={{ width: `${aiUsage ? Math.min(100, Math.max(4, aiUsage.calls.successRate)) : 4}%` }} /></div>
           <div className="ai-usage-note">Tracking only. Raven does not enforce Groq limits in this phase.</div>
+        </section>
+
+        <section className="panel cron-panel" id="cron">
+          <div className="panel-header">
+            <div>
+              <div className="panel-title">Cron status</div>
+              <div className="panel-meta">Vercel cron route is /api/run. /api/cron/run is a manual debug alias.</div>
+            </div>
+            <span className={`badge ${cronStatus?.latestRun?.stepsFailed ? "amber" : "green"}`}>{cronStatus?.latestRun ? "active" : "unknown"}</span>
+          </div>
+          {cronStatus ? (
+            <>
+              <div className="run-summary run-summary-tight">
+                <div><span>Route</span><strong>{cronStatus.route}</strong></div>
+                <div><span>Schedule</span><strong>15m</strong></div>
+                <div><span>Window</span><strong>{cronStatus.expected.inWindow ? "open" : "closed"}</strong></div>
+                <div><span>Latest</span><strong>{cronStatus.latestRun ? `#${cronStatus.latestRun.id}` : "none"}</strong></div>
+                <div><span>Age</span><strong>{cronStatus.latestRun ? `${cronStatus.latestRun.ageMinutes}m` : "--"}</strong></div>
+                <div><span>AI</span><strong>{cronStatus.latestRun ? cronStatus.latestRun.aiClassified : 0}</strong></div>
+                <div><span>Scored</span><strong>{cronStatus.latestRun ? cronStatus.latestRun.signalsScored : 0}</strong></div>
+                <div><span>Next</span><strong>{cronStatus.expected.nextExpectedRunInMinutes !== null ? `${cronStatus.expected.nextExpectedRunInMinutes}m` : "--"}</strong></div>
+              </div>
+              <div className="empty-state">{cronStatus.diagnosis[1] || cronStatus.diagnosis[0] || "Cron status loaded."}</div>
+              <div className="market-strip" style={{ padding: "0 13px 12px" }}>
+                <a className="badge blue" href="/api/cron/status">Cron JSON</a>
+                <a className="badge blue" href="/api/cron/status/report">Cron report</a>
+                <a className="badge green" href="/api/cron/run">Run alias</a>
+              </div>
+            </>
+          ) : (
+            <div className="empty-state">Cron status unavailable.</div>
+          )}
         </section>
 
         <div className="kpi-row">
