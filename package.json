@@ -3,28 +3,29 @@
   "version": "0.1.0",
   "private": true,
   "engines": {
-    "node": "22.x"
+    "node": "20.x",
+    "npm": "10.x"
   },
   "scripts": {
     "dev": "next dev",
-    "build": "next build --turbopack",
+    "build": "next build",
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "next": "16.2.6",
-    "react": "19.2.1",
-    "react-dom": "19.2.1",
-    "postgres": "3.4.7"
+    "react": "19.2.6",
+    "react-dom": "19.2.6",
+    "postgres": "3.4.9"
   },
   "devDependencies": {
-    "@types/node": "22.19.0",
-    "@types/react": "19.2.7",
+    "@types/node": "22.19.19",
+    "@types/react": "19.2.15",
     "@types/react-dom": "19.2.3",
-    "eslint": "9.39.1",
+    "eslint": "9.39.4",
     "eslint-config-next": "16.2.6",
     "typescript": "5.9.3"
   },
-  "packageManager": "pnpm@10.20.0"
+  "packageManager": "npm@10.8.2"
 }

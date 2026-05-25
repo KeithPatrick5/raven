@@ -4,7 +4,5 @@
       "path": "/api/run",
       "schedule": "*/15 13-20 * * 1-5"
     }
-  ],
-  "installCommand": "corepack enable && pnpm install --no-frozen-lockfile",
-  "buildCommand": "corepack enable && pnpm run build"
+  ]
 }
