@@ -244,6 +244,27 @@ export async function ensureRavenTables() {
 
 
   await sql`
+    create table if not exists raw_fda_observations (
+      id bigserial primary key,
+      source_id text not null unique,
+      endpoint text not null,
+      event_date date,
+      title text not null,
+      summary text not null,
+      source_url text,
+      raw_payload jsonb not null default '{}'::jsonb,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now()
+    )
+  `;
+
+  await sql`
+    create index if not exists raw_fda_observations_endpoint_date_idx
+    on raw_fda_observations (endpoint, event_date desc)
+  `;
+
+
+  await sql`
     create table if not exists raw_fda_events (
       id bigserial primary key,
       source_id text not null,

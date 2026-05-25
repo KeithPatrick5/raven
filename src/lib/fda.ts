@@ -9,6 +9,7 @@ type FdaWatchTerm = {
   category: string;
   priority: "high" | "medium" | "low";
   confidence: number;
+  strength: "strong" | "medium" | "weak";
 };
 
 type FdaRawEvent = {
@@ -30,6 +31,17 @@ type FdaSignal = FdaRawEvent & {
   action: "watch_only" | "ignore";
   status: "watch" | "ignored";
   confidence: number;
+  matchStrength: "strong" | "medium" | "weak";
+  severity: "high" | "medium" | "low";
+};
+
+type SuppressedFdaMatch = {
+  sourceId: string;
+  ticker: string;
+  matchedTerm: string;
+  endpoint: FdaEndpoint;
+  reason: string;
+  title: string;
 };
 
 const OPENFDA_ENDPOINTS: Array<{ endpoint: FdaEndpoint; url: string; label: string }> = [
@@ -39,15 +51,30 @@ const OPENFDA_ENDPOINTS: Array<{ endpoint: FdaEndpoint; url: string; label: stri
 ];
 
 const FDA_WATCH_TERMS: FdaWatchTerm[] = [
-  { term: "ginkgo", ticker: "DNA", category: "biotech_regulatory", priority: "medium", confidence: 60 },
-  { term: "bioworks", ticker: "DNA", category: "biotech_regulatory", priority: "medium", confidence: 60 },
-  { term: "synthetic biology", ticker: "DNA", category: "biotech_regulatory", priority: "medium", confidence: 58 },
-  { term: "cell therapy", ticker: "DNA", category: "biotech_regulatory", priority: "medium", confidence: 56 },
-  { term: "gene therapy", ticker: "DNA", category: "biotech_regulatory", priority: "medium", confidence: 56 },
-  { term: "genetic", ticker: "DNA", category: "biotech_regulatory", priority: "low", confidence: 48 },
-  { term: "biotechnology", ticker: "DNA", category: "biotech_regulatory", priority: "low", confidence: 46 },
-  { term: "laboratory developed test", ticker: "DNA", category: "diagnostics_policy", priority: "medium", confidence: 54 },
-  { term: "diagnostic", ticker: "DNA", category: "diagnostics_policy", priority: "low", confidence: 44 }
+  { term: "ginkgo bioworks", ticker: "DNA", category: "company_direct_fda", priority: "high", confidence: 82, strength: "strong" },
+  { term: "ginkgo", ticker: "DNA", category: "company_direct_fda", priority: "high", confidence: 78, strength: "strong" },
+  { term: "biofoundry", ticker: "DNA", category: "synthetic_biology_fda", priority: "high", confidence: 72, strength: "strong" },
+  { term: "cell programming", ticker: "DNA", category: "synthetic_biology_fda", priority: "high", confidence: 70, strength: "strong" },
+  { term: "synthetic biology", ticker: "DNA", category: "synthetic_biology_fda", priority: "medium", confidence: 64, strength: "medium" },
+  { term: "laboratory developed test", ticker: "DNA", category: "diagnostics_policy", priority: "medium", confidence: 58, strength: "medium" },
+  { term: "gene therapy", ticker: "DNA", category: "biotech_regulatory", priority: "medium", confidence: 56, strength: "medium" },
+  { term: "cell therapy", ticker: "DNA", category: "biotech_regulatory", priority: "medium", confidence: 56, strength: "medium" },
+  { term: "biotechnology", ticker: "DNA", category: "biotech_regulatory", priority: "low", confidence: 38, strength: "weak" },
+  { term: "diagnostic", ticker: "DNA", category: "diagnostics_policy", priority: "low", confidence: 34, strength: "weak" },
+  { term: "genetic", ticker: "DNA", category: "biotech_regulatory", priority: "low", confidence: 34, strength: "weak" }
+];
+
+const LOW_VALUE_CONSUMER_TERMS = [
+  "cough drop",
+  "cough drops",
+  "menthol",
+  "oral anesthetic",
+  "throat soothing",
+  "food market",
+  "honey lemon",
+  "cherry flavor",
+  "vanilla honey",
+  "demulcent"
 ];
 
 function compact(value: unknown, fallback = "") {
@@ -63,6 +90,54 @@ function yyyymmddToIso(value: unknown) {
 
 function textBlob(event: FdaRawEvent) {
   return `${event.title} ${event.summary} ${JSON.stringify(event.rawPayload)}`.toLowerCase();
+}
+
+function eventSeverity(haystack: string): "high" | "medium" | "low" {
+  if (
+    haystack.includes("class i") ||
+    haystack.includes("death") ||
+    haystack.includes("life-threatening") ||
+    haystack.includes("serious adverse") ||
+    haystack.includes("serious injury") ||
+    haystack.includes("contamination") ||
+    haystack.includes("sterility") ||
+    haystack.includes("warning letter")
+  ) {
+    return "high";
+  }
+
+  if (
+    haystack.includes("class ii") ||
+    haystack.includes("manufacturing violation") ||
+    haystack.includes("device malfunction") ||
+    haystack.includes("labeling issue") ||
+    haystack.includes("recall") ||
+    haystack.includes("quality")
+  ) {
+    return "medium";
+  }
+
+  return "low";
+}
+
+function isLowValueConsumerEvent(haystack: string) {
+  return LOW_VALUE_CONSUMER_TERMS.some((term) => haystack.includes(term));
+}
+
+function shouldSurfaceFdaSignal(term: FdaWatchTerm, haystack: string, severity: "high" | "medium" | "low") {
+  const consumerNoise = isLowValueConsumerEvent(haystack);
+
+  if (term.strength === "strong") return { surface: true, reason: "direct_company_or_high_specificity_match" };
+
+  if (term.strength === "medium" && severity !== "low" && !consumerNoise) {
+    return { surface: true, reason: "specific_sector_match_with_meaningful_severity" };
+  }
+
+  if (term.strength === "weak" && severity === "high" && !consumerNoise) {
+    return { surface: true, reason: "weak_sector_match_but_high_severity_event" };
+  }
+
+  return { surface: false, reason: consumerNoise ? "suppressed_consumer_product_noise" : "suppressed_broad_industry_match" };
 }
 
 function buildRawEvent(endpoint: FdaEndpoint, payload: Record<string, unknown>, index: number): FdaRawEvent {
@@ -87,19 +162,36 @@ function buildRawEvent(endpoint: FdaEndpoint, payload: Record<string, unknown>, 
 
 function findSignals(rawEvents: FdaRawEvent[]) {
   const signals: FdaSignal[] = [];
+  const suppressed: SuppressedFdaMatch[] = [];
   const seen = new Set<string>();
 
   for (const event of rawEvents) {
     const haystack = textBlob(event);
+    const severity = eventSeverity(haystack);
+
     for (const term of FDA_WATCH_TERMS) {
       if (!haystack.includes(term.term.toLowerCase())) continue;
       const key = `${event.sourceId}:${term.ticker}:${term.term}`;
       if (seen.has(key)) continue;
       seen.add(key);
 
-      const severe = haystack.includes("class i") || haystack.includes("serious") || haystack.includes("death") || haystack.includes("injury");
-      const confidence = Math.max(0, Math.min(100, term.confidence + (severe ? 8 : 0)));
-      const materiality = severe || term.priority !== "low" ? "possibly_material" : "routine";
+      const surfaceDecision = shouldSurfaceFdaSignal(term, haystack, severity);
+      if (!surfaceDecision.surface) {
+        suppressed.push({
+          sourceId: event.sourceId,
+          ticker: term.ticker,
+          matchedTerm: term.term,
+          endpoint: event.endpoint,
+          reason: surfaceDecision.reason,
+          title: event.title
+        });
+        continue;
+      }
+
+      const severityBoost = severity === "high" ? 12 : severity === "medium" ? 5 : 0;
+      const confidence = Math.max(0, Math.min(100, term.confidence + severityBoost));
+      const priority = severity === "high" ? "high" : term.priority;
+      const materiality = confidence >= 50 ? "possibly_material" : "routine";
       const action = materiality === "possibly_material" && confidence >= 50 ? "watch_only" : "ignore";
 
       signals.push({
@@ -107,16 +199,18 @@ function findSignals(rawEvents: FdaRawEvent[]) {
         ticker: term.ticker,
         matchedTerm: term.term,
         category: term.category,
-        priority: severe ? "high" : term.priority,
+        priority,
         materiality,
         action,
         status: action === "watch_only" ? "watch" : "ignored",
-        confidence
+        confidence,
+        matchStrength: term.strength,
+        severity
       });
     }
   }
 
-  return signals.slice(0, 50);
+  return { signals: signals.slice(0, 50), suppressed };
 }
 
 async function fetchOpenFdaEndpoint(endpoint: { endpoint: FdaEndpoint; url: string }) {
@@ -126,6 +220,53 @@ async function fetchOpenFdaEndpoint(endpoint: { endpoint: FdaEndpoint; url: stri
   const payload = await response.json() as { results?: Array<Record<string, unknown>> };
   const rawEvents = (payload.results || []).map((result, index) => buildRawEvent(endpoint.endpoint, result, index));
   return { rawEvents, error: null };
+}
+
+async function saveRawFdaObservations(rawEvents: FdaRawEvent[]) {
+  if (!hasDatabase()) return { saved: 0, skipped: rawEvents.length, database: "not_configured" as const, errors: [] as Array<{ sourceId: string; error: string }> };
+
+  await ensureRavenTables();
+  const sql = db();
+  let saved = 0;
+  const errors: Array<{ sourceId: string; error: string }> = [];
+
+  for (const event of rawEvents) {
+    try {
+      const result = await sql<Array<{ inserted: boolean }>>`
+        insert into raw_fda_observations (
+          source_id,
+          endpoint,
+          event_date,
+          title,
+          summary,
+          source_url,
+          raw_payload
+        ) values (
+          ${event.sourceId},
+          ${event.endpoint},
+          ${event.eventDate},
+          ${event.title},
+          ${event.summary},
+          ${event.sourceUrl},
+          ${JSON.stringify(event.rawPayload)}::jsonb
+        )
+        on conflict (source_id) do update set
+          endpoint = excluded.endpoint,
+          event_date = excluded.event_date,
+          title = excluded.title,
+          summary = excluded.summary,
+          source_url = excluded.source_url,
+          raw_payload = excluded.raw_payload,
+          updated_at = now()
+        returning (xmax = 0) as inserted
+      `;
+      if (result[0]?.inserted) saved += 1;
+    } catch (error) {
+      errors.push({ sourceId: event.sourceId, error: error instanceof Error ? error.message : "Unknown raw FDA observation storage failure" });
+    }
+  }
+
+  return { saved, skipped: rawEvents.length - saved, database: "configured" as const, errors };
 }
 
 async function saveRawFdaSignals(signals: FdaSignal[]) {
@@ -174,7 +315,7 @@ async function saveRawFdaSignals(signals: FdaSignal[]) {
       `;
       if (result[0]?.inserted) saved += 1;
     } catch (error) {
-      errors.push({ sourceId: signal.sourceId, error: error instanceof Error ? error.message : "Unknown FDA storage failure" });
+      errors.push({ sourceId: signal.sourceId, error: error instanceof Error ? error.message : "Unknown FDA signal storage failure" });
     }
   }
 
@@ -205,7 +346,9 @@ async function upsertFdaSignalEvents(signals: FdaSignal[]) {
         metadata: {
           endpoint: signal.endpoint,
           matchedTerm: signal.matchedTerm,
-          note: "FDA/openFDA matches are regulatory or safety context. Raven treats them as watch signals unless price and stronger catalysts confirm."
+          matchStrength: signal.matchStrength,
+          severity: signal.severity,
+          note: "FDA/openFDA raw data is archived broadly. Raven only surfaces FDA signals for strong company/product/facility matches or severe regulatory events."
         }
       });
       eventsCreatedOrUpdated += 1;
@@ -228,27 +371,34 @@ export async function scanFdaSignals() {
     if (result.error) fetchErrors.push({ endpoint: endpoint.endpoint, error: result.error });
   }
 
-  const signals = findSignals(rawEvents);
-  const storage = await saveRawFdaSignals(signals);
+  const { signals, suppressed } = findSignals(rawEvents);
+  const rawStorage = await saveRawFdaObservations(rawEvents);
+  const signalStorage = await saveRawFdaSignals(signals);
   const events = await upsertFdaSignalEvents(signals);
-  const errors = [...fetchErrors, ...storage.errors, ...events.errors];
+  const hardErrors = [...rawStorage.errors, ...signalStorage.errors, ...events.errors];
+  const partialErrors = fetchErrors;
 
   return {
     phase: "FDA_SCANNER",
     startedAt,
     finishedAt: new Date().toISOString(),
-    ok: errors.length === 0,
+    ok: hardErrors.length === 0,
+    partial: partialErrors.length > 0,
     endpointCount: OPENFDA_ENDPOINTS.length,
     rawEventCount: rawEvents.length,
+    rawStorage,
     watchTermCount: FDA_WATCH_TERMS.length,
     signalCount: signals.length,
-    storage,
+    weakMatchesSuppressed: suppressed.length,
+    signalStorage,
     eventsCreatedOrUpdated: events.eventsCreatedOrUpdated,
     signals: signals.slice(0, 25).map((signal) => ({
       ticker: signal.ticker,
       endpoint: signal.endpoint,
       eventDate: signal.eventDate,
       matchedTerm: signal.matchedTerm,
+      matchStrength: signal.matchStrength,
+      severity: signal.severity,
       category: signal.category,
       priority: signal.priority,
       materiality: signal.materiality,
@@ -256,6 +406,8 @@ export async function scanFdaSignals() {
       confidence: signal.confidence,
       title: signal.title
     })),
-    errors
+    suppressedSample: suppressed.slice(0, 10),
+    partialErrors,
+    errors: hardErrors
   };
 }
