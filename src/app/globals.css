@@ -470,3 +470,32 @@ h1 {
 .compact-list li + li {
   margin-top: 3px;
 }
+
+.text-green { color: var(--green); }
+.text-red { color: var(--red); }
+
+.empty-state {
+  padding: 16px 13px;
+  color: var(--muted);
+  font-size: 12px;
+  background: rgba(3, 5, 8, 0.36);
+}
+
+.compact-status {
+  display: grid;
+  gap: 8px;
+}
+
+.compact-status div {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.compact-status span {
+  color: var(--dim);
+}
+
+.compact-status strong {
+  color: var(--text);
+}

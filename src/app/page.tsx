@@ -20,6 +20,14 @@ function statusTone(status: string) {
   return "blue";
 }
 
+function actionTone(action: string) {
+  if (action === "paper_trade_candidate") return "green";
+  if (action === "high_watch" || action === "watch_only") return "blue";
+  if (action === "danger_watch") return "amber";
+  if (action === "avoid") return "red";
+  return "red";
+}
+
 function parseList(value: Jsonish): string[] {
   if (Array.isArray(value)) return value;
   if (!value) return [];
@@ -32,6 +40,7 @@ function parseList(value: Jsonish): string[] {
 }
 
 function seconds(ms: number) {
+  if (!Number.isFinite(ms)) return "--";
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
@@ -47,9 +56,20 @@ function shortDate(value: string | null | undefined) {
   });
 }
 
+function cleanLabel(value: string | null | undefined) {
+  if (!value) return "--";
+  return value.split("_").join(" ");
+}
+
+function primaryReason(reasons: string[]) {
+  if (!reasons.length) return "No reason logged.";
+  const useful = reasons.find((reason) => !reason.toLowerCase().startsWith("ai tradeability starts"));
+  return useful || reasons[0];
+}
+
 async function safeSignals() {
   try {
-    return await getLatestScoredSignals(8);
+    return await getLatestScoredSignals(6);
   } catch {
     return [];
   }
@@ -57,7 +77,7 @@ async function safeSignals() {
 
 async function safePaperTrades() {
   try {
-    return await getLatestPaperTrades(8);
+    return await getLatestPaperTrades(6);
   } catch {
     return [];
   }
@@ -65,7 +85,7 @@ async function safePaperTrades() {
 
 async function safePaperDecisions() {
   try {
-    return await getLatestPaperDecisions(8);
+    return await getLatestPaperDecisions(6);
   } catch {
     return [];
   }
@@ -73,7 +93,7 @@ async function safePaperDecisions() {
 
 async function safePipelineRuns() {
   try {
-    return await getLatestPipelineRuns(5);
+    return await getLatestPipelineRuns(6);
   } catch {
     return [];
   }
@@ -90,7 +110,9 @@ export default async function Home() {
   const latestRun = pipelineRuns[0];
   const openTrades = paperTrades.filter((trade) => trade.status === "open");
   const closedTrades = paperTrades.filter((trade) => trade.status === "closed");
-  const rejectedDecisions = paperDecisions.filter((decision) => decision.decision === "reject");
+  const latestSignal = signals[0];
+  const latestDecision = paperDecisions[0];
+  const latestErrors = latestRun?.steps_failed || 0;
 
   return (
     <main className="raven-shell">
@@ -99,36 +121,34 @@ export default async function Home() {
           <div className="mark">R</div>
           <div>
             <div className="brand-title">RAVEN</div>
-            <div className="brand-subtitle">signal engine</div>
+            <div className="brand-subtitle">signals</div>
           </div>
         </div>
 
         <nav className="nav" aria-label="Raven navigation">
           <a className="nav-item active" href="#overview">Overview <span className="nav-pill">live</span></a>
+          <a className="nav-item" href="#trades">Trades <span className="nav-pill">{openTrades.length}</span></a>
           <a className="nav-item" href="#signals">Signals <span className="nav-pill">{signals.length}</span></a>
-          <a className="nav-item" href="#paper">Paper Trades <span className="nav-pill">{openTrades.length}</span></a>
           <a className="nav-item" href="#decisions">Decisions <span className="nav-pill">{paperDecisions.length}</span></a>
-          <a className="nav-item" href="#watchlist">Watchlist <span className="nav-pill">{watchlist.length}</span></a>
           <a className="nav-item" href="#runs">Runs <span className="nav-pill">{pipelineRuns.length}</span></a>
+          <a className="nav-item" href="#watchlist">Watchlist <span className="nav-pill">{watchlist.length}</span></a>
         </nav>
 
-        <div className="sidebar-footer">
-          <strong>Live trading:</strong> disabled<br />
-          <strong>Mode:</strong> paper only<br />
-          <strong>Alerts:</strong> trade events only
+        <div className="sidebar-footer compact-status">
+          <div><span>Live</span><strong>OFF</strong></div>
+          <div><span>Mode</span><strong>Paper</strong></div>
+          <div><span>Alerts</span><strong>Trades</strong></div>
         </div>
       </aside>
 
       <section className="main">
         <div className="topbar" id="overview">
           <div>
-            <div className="eyebrow">Raven command</div>
-            <h1>Private signal board</h1>
+            <div className="eyebrow">Command</div>
+            <h1>Raven</h1>
           </div>
           <div className="top-actions">
-            <a className="badge green" href="/api/run/pipeline">Run pipeline</a>
-            <a className="badge blue" href="/api/run/logs">Run logs</a>
-            <a className="badge amber" href="/api/alert/telegram?mode=test">Test Telegram</a>
+            <a className="badge green" href="/api/run/pipeline">Run</a>
             <form action="/api/logout" method="post">
               <button className="ghost-button" type="submit">Lock</button>
             </form>
@@ -137,83 +157,36 @@ export default async function Home() {
 
         <div className="kpi-row">
           <div className="kpi">
-            <div className="kpi-label">Last run</div>
+            <div className="kpi-label">Status</div>
             <div className="kpi-value">{latestRun ? latestRun.status : "none"}</div>
-            <div className="kpi-note">{latestRun ? `${shortDate(latestRun.created_at)} · ${seconds(latestRun.duration_ms)}` : "No pipeline runs logged"}</div>
+            <div className="kpi-note">{latestRun ? `${shortDate(latestRun.created_at)} · ${seconds(latestRun.duration_ms)}` : "No runs yet"}</div>
           </div>
           <div className="kpi">
             <div className="kpi-label">Open trades</div>
             <div className="kpi-value">{openTrades.length}</div>
-            <div className="kpi-note">{closedTrades.length} closed in recent log</div>
+            <div className="kpi-note">{closedTrades.length} closed</div>
           </div>
           <div className="kpi">
-            <div className="kpi-label">Latest score</div>
-            <div className="kpi-value">{signals[0] ? signals[0].final_score : "--"}</div>
-            <div className="kpi-note">{signals[0] ? `${signals[0].ticker} · ${signals[0].action}` : "No scored signals"}</div>
+            <div className="kpi-label">Latest call</div>
+            <div className="kpi-value">{latestDecision ? latestDecision.decision : "--"}</div>
+            <div className="kpi-note">{latestDecision ? `${latestDecision.ticker} · ${latestDecision.final_score}/100` : "No decisions"}</div>
           </div>
           <div className="kpi">
-            <div className="kpi-label">Live trading</div>
-            <div className="kpi-value">OFF</div>
-            <div className="kpi-note">Paper engine only</div>
+            <div className="kpi-label">Errors</div>
+            <div className={`kpi-value ${latestErrors ? "text-red" : "text-green"}`}>{latestErrors}</div>
+            <div className="kpi-note">last run</div>
           </div>
         </div>
 
         <div className="grid">
           <div className="left-stack">
-            <section className="panel" id="signals">
-              <div className="panel-header">
-                <div>
-                  <div className="panel-title">Scored signals</div>
-                  <div className="panel-meta">Latest Raven scores</div>
-                </div>
-                <a className="badge green" href="/api/score/signals">Score</a>
-              </div>
-
-              {signals.length > 0 ? (
-                <div className="signal-list">
-                  {signals.map((signal) => {
-                    const reasons = parseList(signal.reason_codes as Jsonish);
-                    const risks = parseList(signal.risk_flags as Jsonish);
-                    return (
-                      <article className="signal-card" key={signal.accession_number}>
-                        <div className="signal-head">
-                          <div>
-                            <div className="signal-title">{signal.ticker} · {signal.category}</div>
-                            <div className="panel-meta">{signal.direction} · {signal.market_confirmation} · {signal.action}</div>
-                          </div>
-                          <div className={`score ${scoreTone(signal.final_score)}`}>{signal.final_score}</div>
-                        </div>
-                        <p className="signal-copy">{signal.readable_summary}</p>
-                        <div className="market-strip">
-                          <span>{signal.form}</span>
-                          <span>AI {signal.ai_tradeability}/100</span>
-                          <span>{signal.risk_level} risk</span>
-                        </div>
-                        {reasons.length ? (
-                          <ul className="compact-list">
-                            {reasons.slice(0, 3).map((reason) => <li key={reason}>{reason}</li>)}
-                          </ul>
-                        ) : null}
-                        {risks[0] ? <p className="signal-copy"><strong>Risk:</strong> {risks[0]}</p> : null}
-                      </article>
-                    );
-                  })}
-                </div>
-              ) : (
-                <div className="console">No scored signals yet.</div>
-              )}
-            </section>
-
-            <section className="panel" id="paper" style={{ marginTop: 14 }}>
+            <section className="panel" id="trades">
               <div className="panel-header">
                 <div>
                   <div className="panel-title">Paper trades</div>
-                  <div className="panel-meta">Trades Raven actually opened</div>
+                  <div className="panel-meta">Open and closed</div>
                 </div>
-                <div className="top-actions">
-                  <a className="badge green" href="/api/paper/trades">Evaluate</a>
-                  <a className="badge blue" href="/api/paper/trades/review">Review</a>
-                </div>
+                <span className="badge green">{openTrades.length} open</span>
               </div>
               {paperTrades.length > 0 ? (
                 <div className="signal-list">
@@ -238,7 +211,47 @@ export default async function Home() {
                   ))}
                 </div>
               ) : (
-                <div className="console">No paper trades opened.</div>
+                <div className="empty-state">No paper trades opened.</div>
+              )}
+            </section>
+
+            <section className="panel" id="signals" style={{ marginTop: 14 }}>
+              <div className="panel-header">
+                <div>
+                  <div className="panel-title">Signals</div>
+                  <div className="panel-meta">Current scores</div>
+                </div>
+                {latestSignal ? <span className={`badge ${actionTone(latestSignal.action)}`}>{cleanLabel(latestSignal.action)}</span> : <span className="badge">none</span>}
+              </div>
+
+              {signals.length > 0 ? (
+                <div className="signal-list">
+                  {signals.map((signal) => {
+                    const reasons = parseList(signal.reason_codes as Jsonish);
+                    const risks = parseList(signal.risk_flags as Jsonish);
+                    return (
+                      <article className="signal-card" key={signal.accession_number}>
+                        <div className="signal-head">
+                          <div>
+                            <div className="signal-title">{signal.ticker} · {cleanLabel(signal.category)}</div>
+                            <div className="panel-meta">{signal.direction} · {signal.market_confirmation} · {cleanLabel(signal.action)}</div>
+                          </div>
+                          <div className={`score ${scoreTone(signal.final_score)}`}>{signal.final_score}</div>
+                        </div>
+                        <p className="signal-copy">{signal.readable_summary}</p>
+                        <div className="market-strip">
+                          <span>{signal.form}</span>
+                          <span>AI {signal.ai_tradeability}/100</span>
+                          <span>{signal.risk_level} risk</span>
+                        </div>
+                        <p className="signal-copy"><strong>Why:</strong> {primaryReason(reasons)}</p>
+                        {risks[0] ? <p className="signal-copy"><strong>Risk:</strong> {risks[0]}</p> : null}
+                      </article>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="empty-state">No scored signals.</div>
               )}
             </section>
           </div>
@@ -247,29 +260,29 @@ export default async function Home() {
             <section className="panel" id="runs">
               <div className="panel-header">
                 <div>
-                  <div className="panel-title">Pipeline status</div>
-                  <div className="panel-meta">Latest run summary</div>
+                  <div className="panel-title">Last run</div>
+                  <div className="panel-meta">{latestRun ? shortDate(latestRun.created_at) : "No run"}</div>
                 </div>
-                {latestRun ? <span className={`badge ${statusTone(latestRun.status)}`}>{latestRun.status}</span> : <span className="badge amber">no run</span>}
+                {latestRun ? <span className={`badge ${statusTone(latestRun.status)}`}>{latestRun.status}</span> : <span className="badge amber">none</span>}
               </div>
               {latestRun ? (
                 <div className="table-wrap">
                   <table className="table">
                     <tbody>
                       <tr><td>Duration</td><td>{seconds(latestRun.duration_ms)}</td></tr>
-                      <tr><td>SEC filings</td><td>{latestRun.sec_filings_found} found · {latestRun.sec_filings_saved} new</td></tr>
-                      <tr><td>AI classified</td><td>{latestRun.ai_classified}</td></tr>
-                      <tr><td>Alpaca confirmed</td><td>{latestRun.alpaca_confirmed}</td></tr>
-                      <tr><td>Signals scored</td><td>{latestRun.signals_scored}</td></tr>
-                      <tr><td>Trades opened</td><td>{latestRun.paper_trades_opened}</td></tr>
-                      <tr><td>Trades closed</td><td>{latestRun.paper_trades_closed}</td></tr>
+                      <tr><td>Filings</td><td>{latestRun.sec_filings_found} found · {latestRun.sec_filings_saved} new</td></tr>
+                      <tr><td>Classified</td><td>{latestRun.ai_classified}</td></tr>
+                      <tr><td>Confirmed</td><td>{latestRun.alpaca_confirmed}</td></tr>
+                      <tr><td>Scored</td><td>{latestRun.signals_scored}</td></tr>
+                      <tr><td>Opened</td><td>{latestRun.paper_trades_opened}</td></tr>
+                      <tr><td>Closed</td><td>{latestRun.paper_trades_closed}</td></tr>
                       <tr><td>Rejected</td><td>{latestRun.paper_trades_rejected}</td></tr>
                       <tr><td>Errors</td><td>{latestRun.steps_failed}</td></tr>
                     </tbody>
                   </table>
                 </div>
               ) : (
-                <div className="console">Run the pipeline to create a status log.</div>
+                <div className="empty-state">No run history.</div>
               )}
             </section>
 
@@ -277,9 +290,8 @@ export default async function Home() {
               <div className="panel-header">
                 <div>
                   <div className="panel-title">Recent decisions</div>
-                  <div className="panel-meta">Trade and no-trade calls</div>
+                  <div className="panel-meta">Latest calls</div>
                 </div>
-                <a className="badge blue" href="/api/paper/decisions">View JSON</a>
               </div>
               {paperDecisions.length > 0 ? (
                 <div className="signal-list">
@@ -291,22 +303,22 @@ export default async function Home() {
                         <div className="signal-head">
                           <div>
                             <div className="signal-title">{decision.ticker} · {decision.decision}</div>
-                            <div className="panel-meta">{decision.action} · {shortDate(decision.created_at)}</div>
+                            <div className="panel-meta">{cleanLabel(decision.action)} · {shortDate(decision.created_at)}</div>
                           </div>
                           <div className={`score ${scoreTone(decision.final_score)}`}>{decision.final_score}</div>
                         </div>
                         {rejects.length ? (
                           <div className="market-strip">
-                            {rejects.slice(0, 3).map((reject) => <span key={reject}>{reject.split("_").join(" ")}</span>)}
+                            {rejects.slice(0, 3).map((reject) => <span key={reject}>{cleanLabel(reject)}</span>)}
                           </div>
                         ) : null}
-                        {reasons[0] ? <p className="signal-copy">{reasons[0]}</p> : null}
+                        <p className="signal-copy">{primaryReason(reasons)}</p>
                       </article>
                     );
                   })}
                 </div>
               ) : (
-                <div className="console">No trade decisions logged.</div>
+                <div className="empty-state">No decisions logged.</div>
               )}
             </section>
 
@@ -314,18 +326,11 @@ export default async function Home() {
               <div className="panel-header">
                 <div>
                   <div className="panel-title">Watchlist</div>
-                  <div className="panel-meta">Active scanner tickers</div>
+                  <div className="panel-meta">Active tickers</div>
                 </div>
               </div>
               <div className="table-wrap">
                 <table className="table">
-                  <thead>
-                    <tr>
-                      <th>Ticker</th>
-                      <th>Focus</th>
-                      <th>Status</th>
-                    </tr>
-                  </thead>
                   <tbody>
                     {watchlist.map((item) => (
                       <tr key={item.symbol}>
