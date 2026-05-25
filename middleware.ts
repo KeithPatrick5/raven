@@ -12,16 +12,27 @@ function isPublicPath(pathname: string): boolean {
 }
 
 function hasValidCronSecret(request: NextRequest): boolean {
-  const cronSecret = process.env.RAVEN_CRON_SECRET?.trim();
+  if (!(request.nextUrl.pathname.startsWith("/api/scan") || request.nextUrl.pathname.startsWith("/api/run"))) {
+    return false;
+  }
 
-  if (!cronSecret || !(request.nextUrl.pathname.startsWith("/api/scan") || request.nextUrl.pathname.startsWith("/api/run"))) {
+  const ravenCronSecret = process.env.RAVEN_CRON_SECRET?.trim();
+  const vercelCronSecret = process.env.CRON_SECRET?.trim();
+  const validSecrets = [ravenCronSecret, vercelCronSecret].filter(Boolean);
+
+  if (!validSecrets.length) {
     return false;
   }
 
   const querySecret = request.nextUrl.searchParams.get("secret")?.trim();
   const headerSecret = request.headers.get("x-raven-cron-secret")?.trim();
+  const authHeader = request.headers.get("authorization")?.trim();
 
-  return querySecret === cronSecret || headerSecret === cronSecret;
+  return validSecrets.some((secret) => (
+    querySecret === secret ||
+    headerSecret === secret ||
+    authHeader === `Bearer ${secret}`
+  ));
 }
 
 export async function middleware(request: NextRequest) {
