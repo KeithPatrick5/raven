@@ -1,4 +1,5 @@
 import { db, ensureRavenTables, hasDatabase } from "@/lib/db";
+import { upsertSecSignalEvent } from "@/lib/signalEvents";
 
 type PendingScoringRow = {
   summary_id: number;
@@ -27,6 +28,7 @@ type PendingScoringRow = {
   raven_materiality: string | null;
   raven_form_family: string | null;
   raven_is_routine_form4: boolean | null;
+  source_url: string | null;
 };
 
 function clampScore(value: number) {
@@ -260,7 +262,8 @@ async function getPendingRows(limit: number): Promise<PendingScoringRow[]> {
       nullif(r.raw_payload->>'ravenPriorityScore', '')::integer as raven_priority_score,
       r.raw_payload->>'ravenMateriality' as raven_materiality,
       r.raw_payload->>'ravenFormFamily' as raven_form_family,
-      nullif(r.raw_payload->>'ravenIsRoutineForm4', '')::boolean as raven_is_routine_form4
+      nullif(r.raw_payload->>'ravenIsRoutineForm4', '')::boolean as raven_is_routine_form4,
+      r.source_url
     from sec_filing_summaries s
     left join raw_sec_filings r
       on r.id = s.raw_filing_id
@@ -278,7 +281,7 @@ async function saveScore(row: PendingScoringRow) {
   const sql = db();
   const result = scoreRow(row);
 
-  await sql`
+  const inserted = await sql<Array<{ id: number }>>`
     insert into scored_signals (
       summary_id,
       confirmation_id,
@@ -338,8 +341,40 @@ async function saveScore(row: PendingScoringRow) {
         }
       })}::jsonb
     )
-    on conflict (summary_id) do nothing
+    on conflict (summary_id) do update set
+      confirmation_id = excluded.confirmation_id,
+      market_confirmation = excluded.market_confirmation,
+      final_score = excluded.final_score,
+      action = excluded.action,
+      readable_summary = excluded.readable_summary,
+      reason_codes = excluded.reason_codes,
+      risk_flags = excluded.risk_flags,
+      raw_payload = excluded.raw_payload
+    returning id
   `;
+
+  const scoredSignalId = inserted[0]?.id;
+  if (scoredSignalId) {
+    await upsertSecSignalEvent({
+      scoredSignalId,
+      accessionNumber: row.accession_number,
+      ticker: row.ticker,
+      form: row.form,
+      filingDate: row.filing_date,
+      category: row.category,
+      direction: row.direction,
+      finalScore: result.score,
+      action: result.action,
+      summary: row.summary,
+      sourceUrl: row.source_url,
+      priority: row.raven_priority,
+      priorityScore: row.raven_priority_score,
+      materiality: row.raven_materiality,
+      formFamily: row.raven_form_family,
+      marketConfirmation: row.confirmation_status || "unconfirmed",
+      riskLevel: row.risk_level
+    });
+  }
 
   return {
     ticker: row.ticker,

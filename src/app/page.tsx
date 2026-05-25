@@ -1,6 +1,7 @@
 import { getLatestPaperDecisions, getLatestPaperTrades } from "@/lib/paper";
 import { getLatestPipelineRuns } from "@/lib/pipelineRuns";
 import { getLatestScoredSignals } from "@/lib/scoring";
+import { getLatestSignalEvents, getSignalSourceHealth } from "@/lib/signalEvents";
 import { watchlist } from "@/lib/watchlist";
 
 export const dynamic = "force-dynamic";
@@ -17,7 +18,23 @@ function scoreTone(score: number) {
 function statusTone(status: string) {
   if (status === "completed") return "green";
   if (status === "needs_attention") return "amber";
+  if (status === "active") return "green";
+  if (status === "queued") return "blue";
+  if (status === "failed") return "red";
   return "blue";
+}
+
+function sourceTone(source: string) {
+  if (source === "SEC") return "green";
+  if (source === "FINRA") return "amber";
+  if (source === "FED_REG" || source === "FDA") return "blue";
+  if (source === "CONGRESS" || source === "NEWS") return "blue";
+  return "blue";
+}
+
+function sourceLabel(source: string) {
+  if (source === "FED_REG") return "FED REG";
+  return source;
 }
 
 function actionTone(action: string) {
@@ -97,6 +114,22 @@ async function safeSignals() {
   }
 }
 
+async function safeSignalEvents() {
+  try {
+    return await getLatestSignalEvents(8);
+  } catch {
+    return [];
+  }
+}
+
+async function safeSourceHealth() {
+  try {
+    return await getSignalSourceHealth();
+  } catch {
+    return [];
+  }
+}
+
 async function safePaperTrades() {
   try {
     return await getLatestPaperTrades(6);
@@ -122,8 +155,10 @@ async function safePipelineRuns() {
 }
 
 export default async function Home() {
-  const [signals, paperTrades, paperDecisions, pipelineRuns] = await Promise.all([
+  const [signals, signalEvents, sourceHealth, paperTrades, paperDecisions, pipelineRuns] = await Promise.all([
     safeSignals(),
+    safeSignalEvents(),
+    safeSourceHealth(),
     safePaperTrades(),
     safePaperDecisions(),
     safePipelineRuns()
@@ -133,6 +168,8 @@ export default async function Home() {
   const openTrades = paperTrades.filter((trade) => trade.status === "open");
   const closedTrades = paperTrades.filter((trade) => trade.status === "closed");
   const latestSignal = signals[0];
+  const latestSignalEvent = signalEvents[0];
+  const activeSources = sourceHealth.filter((source) => source.status === "active").length;
   const latestDecision = paperDecisions[0];
   const latestErrors = latestRun?.steps_failed || 0;
   const lastRunOutcome = latestRun ? runOutcome(latestRun) : "none";
@@ -151,8 +188,9 @@ export default async function Home() {
         <nav className="nav" aria-label="Raven navigation">
           <a className="nav-item active" href="#overview">Overview <span className="nav-pill">live</span></a>
           <a className="nav-item" href="#trades">Trades <span className="nav-pill">{openTrades.length}</span></a>
-          <a className="nav-item" href="#signals">Signals <span className="nav-pill">{signals.length}</span></a>
+          <a className="nav-item" href="#signals">Signals <span className="nav-pill">{signalEvents.length || signals.length}</span></a>
           <a className="nav-item" href="#decisions">Decisions <span className="nav-pill">{paperDecisions.length}</span></a>
+          <a className="nav-item" href="#sources">Sources <span className="nav-pill">{activeSources}</span></a>
           <a className="nav-item" href="#runs">Runs <span className="nav-pill">{pipelineRuns.length}</span></a>
           <a className="nav-item" href="#watchlist">Watchlist <span className="nav-pill">{watchlist.length}</span></a>
         </nav>
@@ -195,9 +233,9 @@ export default async function Home() {
             <div className="kpi-note">{latestDecision ? `${latestDecision.ticker} · ${latestDecision.final_score}/100` : "No decisions"}</div>
           </div>
           <div className="kpi">
-            <div className="kpi-label">Errors</div>
-            <div className={`kpi-value ${latestErrors ? "text-red" : "text-green"}`}>{latestErrors}</div>
-            <div className="kpi-note">last run</div>
+            <div className="kpi-label">Sources</div>
+            <div className="kpi-value">{activeSources}/{sourceHealth.length || 6}</div>
+            <div className="kpi-note">{latestErrors ? `${latestErrors} errors` : "healthy"}</div>
           </div>
         </div>
 
@@ -242,12 +280,43 @@ export default async function Home() {
               <div className="panel-header">
                 <div>
                   <div className="panel-title">Signals</div>
-                  <div className="panel-meta">Current scores</div>
+                  <div className="panel-meta">Unified public signals</div>
                 </div>
-                {latestSignal ? <span className={`badge ${actionTone(latestSignal.action)}`}>{cleanLabel(latestSignal.action)}</span> : <span className="badge">none</span>}
+                {latestSignalEvent ? <span className={`badge ${sourceTone(latestSignalEvent.source)}`}>{sourceLabel(latestSignalEvent.source)}</span> : latestSignal ? <span className={`badge ${actionTone(latestSignal.action)}`}>{cleanLabel(latestSignal.action)}</span> : <span className="badge">none</span>}
               </div>
 
-              {signals.length > 0 ? (
+              {signalEvents.length > 0 ? (
+                <div className="signal-list">
+                  {signalEvents.map((event) => {
+                    const metadata = event.metadata || {};
+                    const marketConfirmation = typeof metadata.marketConfirmation === "string" ? metadata.marketConfirmation : "--";
+                    const riskLevel = typeof metadata.riskLevel === "string" ? metadata.riskLevel : "--";
+                    return (
+                      <article className="signal-card" key={`${event.source}-${event.source_event_id}`}>
+                        <div className="signal-head">
+                          <div>
+                            <div className="signal-title">{event.ticker || "--"} · {event.headline}</div>
+                            <div className="panel-meta">{cleanLabel(event.direction)} · {cleanLabel(event.action)} · {shortDate(event.created_at)}</div>
+                          </div>
+                          <div className={`score ${scoreTone(event.confidence)}`}>{event.confidence}</div>
+                        </div>
+                        <div className="source-row">
+                          <span className={`source-chip ${sourceTone(event.source)}`}>{sourceLabel(event.source)}</span>
+                          <span>{event.event_type}</span>
+                          <span>{cleanLabel(event.priority)}</span>
+                          <span>{cleanLabel(event.materiality)}</span>
+                          <span>{cleanLabel(event.status)}</span>
+                        </div>
+                        <p className="signal-copy">{event.summary}</p>
+                        <div className="market-strip">
+                          <span>market {cleanLabel(marketConfirmation)}</span>
+                          <span>{cleanLabel(riskLevel)} risk</span>
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
+              ) : signals.length > 0 ? (
                 <div className="signal-list">
                   {signals.map((signal) => {
                     const reasons = parseList(signal.reason_codes as Jsonish);
@@ -263,6 +332,7 @@ export default async function Home() {
                         </div>
                         <p className="signal-copy">{signal.readable_summary}</p>
                         <div className="market-strip">
+                          <span>SEC</span>
                           <span>{signal.form}</span>
                           <span>AI {signal.ai_tradeability}/100</span>
                           <span>{signal.risk_level} risk</span>
@@ -358,6 +428,29 @@ export default async function Home() {
               ) : (
                 <div className="empty-state">No runs logged.</div>
               )}
+            </section>
+
+            <section className="panel" id="sources" style={{ marginTop: 14 }}>
+              <div className="panel-header">
+                <div>
+                  <div className="panel-title">Source health</div>
+                  <div className="panel-meta">Public signal feeds</div>
+                </div>
+              </div>
+              <div className="source-health-list">
+                {sourceHealth.map((source) => (
+                  <div className="source-health-row" key={source.source}>
+                    <div>
+                      <span className={`source-chip ${sourceTone(source.source)}`}>{sourceLabel(source.source)}</span>
+                      <div className="panel-meta">{source.latest ? shortDate(source.latest) : "no events"}</div>
+                    </div>
+                    <div className="source-health-right">
+                      <strong>{source.count}</strong>
+                      <span className={`badge ${statusTone(source.status)}`}>{source.status}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </section>
 
             <section className="panel" id="decisions" style={{ marginTop: 14 }}>

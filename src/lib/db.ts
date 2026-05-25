@@ -145,6 +145,47 @@ export async function ensureRavenTables() {
     on scored_signals (ticker, created_at desc)
   `;
 
+
+
+  await sql`
+    create table if not exists signal_events (
+      id bigserial primary key,
+      source text not null,
+      source_event_id text not null,
+      ticker text,
+      event_type text not null,
+      event_time timestamptz,
+      headline text not null,
+      summary text not null,
+      source_url text,
+      priority text not null default 'unknown',
+      materiality text not null default 'unknown',
+      direction text not null default 'neutral',
+      confidence integer not null default 0,
+      status text not null default 'new',
+      action text not null default 'watch',
+      metadata jsonb not null default '{}'::jsonb,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now(),
+      unique(source, source_event_id)
+    )
+  `;
+
+  await sql`
+    create index if not exists signal_events_source_created_idx
+    on signal_events (source, created_at desc)
+  `;
+
+  await sql`
+    create index if not exists signal_events_ticker_created_idx
+    on signal_events (ticker, created_at desc)
+  `;
+
+  await sql`
+    create index if not exists signal_events_confidence_created_idx
+    on signal_events (confidence desc, created_at desc)
+  `;
+
   await sql`
     create table if not exists telegram_alerts (
       id bigserial primary key,
