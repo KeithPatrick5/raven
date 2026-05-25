@@ -96,17 +96,24 @@ const STRONG_BEARISH_TERMS = [
 const GENERIC_NOISE_TERMS = [
   "stock market today", "why shares are moving", "what's going on", "what is going on", "market update",
   "dow jumps", "nasdaq", "s&p 500", "watch these stocks", "most active", "premarket", "after-hours",
-  "roundup", "meme stocks", "this week in", "top 10", "are the others in your portfolio", "opinion",
-  "etf", "polymarket", "space x ipo vs", "spacex ipo vs", "same hype", "alien etf", "target selloff"
+  "roundup", "meme stocks", "this week in", "top 10", "top large-cap", "large-cap gainers",
+  "are the others in your portfolio", "opinion", "etf", "polymarket", "space x ipo vs", "spacex ipo vs",
+  "same hype", "alien etf", "target selloff", "weekly recap", "portfolio?", "why shares are", "stock edges lower"
 ];
 
 const COMPANY_TERMS: Record<string, string[]> = {
-  IONQ: ["ionq", "quantum", "chips act", "commerce department", "government stake", "equity stake", "quantum companies"],
-  PLTR: ["palantir", "pltr", "pentagon", "defense intelligence agency", "dia", "data analytics", "government contract", "defense contract"],
-  SOFI: ["sofi", "student loan", "personal loan", "lending", "bank charter", "consumer finance"],
-  TSLA: ["tesla", "tsla", "model y", "robotaxi", "nhtsa", "vehicle safety", "recall", "delivery", "ev credit"],
-  DNA: ["ginkgo", "ginkgo bioworks", "synthetic biology", "biosecurity", "cell programming", "biofoundry"]
+  IONQ: ["ionq"],
+  PLTR: ["palantir", "pltr"],
+  SOFI: ["sofi"],
+  TSLA: ["tesla", "tsla", "model y", "robotaxi", "nhtsa"],
+  DNA: ["ginkgo", "ginkgo bioworks", "dna", "synthetic biology", "cell programming", "biofoundry"]
 };
+
+const DIRECT_MATERIAL_TERMS = [
+  "contract", "award", "pentagon", "defense intelligence agency", "government contract", "chips act",
+  "commerce department", "equity stake", "recall", "nhtsa", "approval", "cleared", "merger", "acquisition",
+  "guidance", "earnings", "offering", "dilution", "warning letter", "investigation", "lawsuit", "sec charges"
+];
 
 function includesAny(text: string, terms: string[]) {
   return terms.some((term) => text.includes(term));
@@ -119,6 +126,10 @@ function countMatches(text: string, terms: string[]) {
 function isDirectCompanyMatch(article: RawNewsArticle, text: string) {
   const terms = COMPANY_TERMS[article.ticker] || [article.ticker.toLowerCase()];
   return article.symbols.includes(article.ticker) && includesAny(text, terms);
+}
+
+function hasDirectMaterialRelevance(text: string) {
+  return includesAny(text, DIRECT_MATERIAL_TERMS);
 }
 
 function isBasketArticle(article: RawNewsArticle) {
@@ -135,12 +146,19 @@ function classifyNews(article: RawNewsArticle): NewsSignal | null {
   const basketArticle = isBasketArticle(article);
 
   if (!directCompanyMatch) return null;
-  if (genericNoise && strongCatalystCount < 2) return null;
-  if (basketArticle && strongCatalystCount < 2) return null;
   if (strongCatalystCount === 0) return null;
 
+  const directlyMaterial = hasDirectMaterialRelevance(text);
+
+  // Keep raw news broad, but only surface visible NEWS signals when the article is directly useful.
+  // This suppresses market-wrap, ETF, SpaceX-hype, and basket articles unless there is a real ticker catalyst.
+  if (genericNoise && !directlyMaterial) return null;
+  if (basketArticle && !directlyMaterial) return null;
+  if (genericNoise && basketArticle) return null;
+  if (article.ticker === "TSLA" && text.includes("spacex") && !text.includes("tesla") && !text.includes("tsla")) return null;
+
   const direction: NewsSignal["direction"] = strongBearishCount > strongBullishCount ? "bearish" : strongBullishCount > strongBearishCount ? "bullish" : "neutral";
-  const base = 38 + strongCatalystCount * 10 + (directCompanyMatch ? 8 : 0) - (basketArticle ? 8 : 0) - (genericNoise ? 8 : 0);
+  const base = 38 + strongCatalystCount * 10 + (directCompanyMatch ? 8 : 0) + (directlyMaterial ? 6 : 0) - (basketArticle ? 10 : 0) - (genericNoise ? 12 : 0);
   const confidence = Math.max(20, Math.min(100, base));
   const materiality: NewsSignal["materiality"] = confidence >= 62 ? "possibly_material" : "routine";
   const priority: NewsSignal["priority"] = confidence >= 72 ? "high" : confidence >= 55 ? "medium" : "low";

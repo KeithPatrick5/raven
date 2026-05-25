@@ -30,10 +30,6 @@ function num(value: unknown): number {
   return 0;
 }
 
-function yesNo(value: unknown) {
-  return value ? "yes" : "no";
-}
-
 function seconds(ms: unknown) {
   const value = num(ms);
   if (!value) return "0.0s";
@@ -59,6 +55,13 @@ function line(label: string, value: unknown) {
   return `${label}: ${String(value ?? "-")}`;
 }
 
+function isCongressPaywalled(data: Record<string, unknown>) {
+  return asArray(data.errors).every((error) => {
+    const text = JSON.stringify(error).toLowerCase();
+    return text.includes("returned 402") || text.includes("returned 403") || text.includes("payment required") || text.includes("forbidden");
+  }) && asArray(data.errors).length > 0;
+}
+
 function sourceStepLine(run: PipelineLike, name: string, label: string) {
   const found = step(run, name);
   if (!found) return `${label}: not run`;
@@ -68,6 +71,20 @@ function sourceStepLine(run: PipelineLike, name: string, label: string) {
   const signalCount = num(data.signalCount);
   const rawCount = num(data.rawArticleCount) || num(data.rawEventCount) || num(data.rawCandidateCount) || num(data.rowCount);
   const suppressed = num(data.weakMatchesSuppressed);
+
+  if (name === "congress" && isCongressPaywalled(data)) {
+    return `${label}: parked | provider paywalled | no action needed | ${seconds(found.durationMs)}`;
+  }
+
+  if (name === "fda" && partialErrors && !errors) {
+    const bits = [`${label}: ok with partial provider issue`, seconds(found.durationMs)];
+    if (rawCount) bits.push(`raw ${rawCount}`);
+    bits.push(`signals ${signalCount}`);
+    if (suppressed) bits.push(`suppressed ${suppressed}`);
+    bits.push(`provider warnings ${partialErrors}`);
+    return bits.join(" | ");
+  }
+
   const status = found.ok && data.ok !== false ? "ok" : data.partial ? "partial" : "needs attention";
   const bits = [`${label}: ${status}`, seconds(found.durationMs)];
   if (rawCount) bits.push(`raw ${rawCount}`);
@@ -77,16 +94,78 @@ function sourceStepLine(run: PipelineLike, name: string, label: string) {
   return bits.join(" | ");
 }
 
-function topSignalsFromStep(run: PipelineLike, name: string, max = 3) {
+function signalText(source: string, item: unknown) {
+  const signal = asObject(item);
+  const ticker = String(signal.ticker || "?");
+  const action = String(signal.action || "?");
+  const confidence = signal.confidence ?? signal.finalScore ?? "?";
+
+  if (source === "FINRA") {
+    const ratio = signal.shortRatioPercent ?? signal.short_ratio_percent;
+    const shortVolume = signal.shortVolume ?? signal.short_volume;
+    return `- FINRA | ${ticker} | ${action} | ${confidence}/100 | short volume ${ratio ?? "?"}% (${shortVolume ?? "?"} shares)`;
+  }
+
+  const headline = signal.headline || signal.title || signal.summary || signal.category || "signal";
+  return `- ${source} | ${ticker} | ${action} | ${confidence}/100 | ${String(headline).slice(0, 150)}`;
+}
+
+function topSignalsFromStep(run: PipelineLike, name: string, source: string, max = 3) {
   const signals = asArray(result(run, name).signals).slice(0, max);
-  return signals.map((item) => {
-    const signal = asObject(item);
-    const ticker = signal.ticker || "?";
-    const action = signal.action || "?";
-    const confidence = signal.confidence ?? signal.finalScore ?? "?";
-    const headline = signal.headline || signal.title || signal.summary || signal.category || "signal";
-    return `- ${ticker} | ${action} | ${confidence}/100 | ${String(headline).slice(0, 140)}`;
-  });
+  return signals.map((item) => signalText(source, item));
+}
+
+function buildRavenRead(run: PipelineLike) {
+  const paper = result(run, "paper_trade_engine");
+  const score = result(run, "score_signals");
+  const rejects = asArray(paper.rejects);
+  const trades = asArray(paper.trades);
+  const scoredSignals = asArray(score.signals);
+
+  if (trades.length) {
+    const trade = asObject(trades[0]);
+    return `Raven opened ${trades.length} paper trade(s). Lead trade: ${trade.ticker || "unknown"}. Live trading remains disabled.`;
+  }
+
+  if (rejects.length) {
+    const reject = asObject(rejects[0]);
+    return `Raven found ${reject.ticker || "a candidate"} as the strongest evaluated candidate, but rejected it because ${(asArray(reject.rejects).join(", ") || "rules did not pass")}. No paper trade opened.`;
+  }
+
+  if (scoredSignals.length) {
+    const signal = asObject(scoredSignals[0]);
+    return `Raven scored ${scoredSignals.length} signal(s). Strongest visible score was ${signal.ticker || "unknown"} at ${signal.finalScore ?? signal.confidence ?? "?"}/100 with action ${signal.action || "unknown"}. No paper trade opened.`;
+  }
+
+  return "Raven completed the run without opening a paper trade. No tradeable setup passed the deterministic rules.";
+}
+
+function reportIssues(run: PipelineLike) {
+  const issues: string[] = [];
+
+  for (const item of run.steps || []) {
+    const data = asObject(item.result);
+    if (item.error) issues.push(`${item.name}: ${item.error}`);
+
+    if (item.name === "congress" && isCongressPaywalled(data)) {
+      issues.push("congress: parked/provider paywalled. No action needed unless you decide to pay for congressional data later.");
+      continue;
+    }
+
+    if (item.name === "fda") {
+      for (const error of asArray(data.partialErrors)) {
+        const text = JSON.stringify(error);
+        issues.push(`fda: partial provider issue, scanner still ok: ${text}`);
+      }
+      for (const error of asArray(data.errors)) issues.push(`fda: ${JSON.stringify(error)}`);
+      continue;
+    }
+
+    for (const error of asArray(data.errors)) issues.push(`${item.name}: ${JSON.stringify(error)}`);
+    for (const error of asArray(data.partialErrors)) issues.push(`${item.name}: ${JSON.stringify(error)}`);
+  }
+
+  return Array.from(new Set(issues));
 }
 
 export function buildPipelineTextReport(run: PipelineLike) {
@@ -100,14 +179,14 @@ export function buildPipelineTextReport(run: PipelineLike) {
   const review = result(run, "paper_trade_review");
   const paperRejects = asArray(paper.rejects);
   const paperTrades = asArray(paper.trades);
-  const errors = (run.steps || []).flatMap((item) => {
-    const data = asObject(item.result);
-    return [
-      ...(item.error ? [`${item.name}: ${item.error}`] : []),
-      ...asArray(data.errors).map((error) => `${item.name}: ${JSON.stringify(error)}`),
-      ...asArray(data.partialErrors).map((error) => `${item.name}: ${JSON.stringify(error)}`)
-    ];
-  });
+  const issues = reportIssues(run);
+
+  const topSignals = [
+    ...topSignalsFromStep(run, "score_signals", "SEC", 3),
+    ...topSignalsFromStep(run, "news", "NEWS", 3),
+    ...topSignalsFromStep(run, "federal_register", "FED REG", 2),
+    ...topSignalsFromStep(run, "finra_short_volume", "FINRA", 2)
+  ].slice(0, 10);
 
   const lines = [
     "RAVEN RUN REPORT",
@@ -117,6 +196,10 @@ export function buildPipelineTextReport(run: PipelineLike) {
     line("Finished", shortTime(run.finishedAt)),
     line("Live trading", run.liveTrading || "disabled"),
     line("Steps", `${summary.steps ?? (run.steps || []).length} total, ${summary.failed ?? 0} failed`),
+    "",
+    "RAVEN READ",
+    "----------",
+    buildRavenRead(run),
     "",
     "CORE RESULT",
     "-----------",
@@ -138,12 +221,7 @@ export function buildPipelineTextReport(run: PipelineLike) {
     "",
     "TOP SIGNALS THIS RUN",
     "--------------------",
-    ...[
-      ...topSignalsFromStep(run, "score_signals", 3),
-      ...topSignalsFromStep(run, "news", 3),
-      ...topSignalsFromStep(run, "federal_register", 2),
-      ...topSignalsFromStep(run, "finra_short_volume", 2)
-    ].slice(0, 10),
+    ...(topSignals.length ? topSignals : ["None"]),
     "",
     "TRADE DECISION",
     "--------------",
@@ -154,9 +232,9 @@ export function buildPipelineTextReport(run: PipelineLike) {
       return `- ${reject.ticker || "?"} | score ${reject.score ?? "?"} | ${reject.action || "?"} | ${(asArray(reject.rejects).join(", ") || "rejected")}`;
     }),
     "",
-    "ERRORS / PARTIALS",
-    "-----------------",
-    ...(errors.length ? errors.slice(0, 12) : ["None"]),
+    "WARNINGS / PARTIALS",
+    "-------------------",
+    ...(issues.length ? issues.slice(0, 8) : ["None"]),
     "",
     "COPY NOTE",
     "---------",
