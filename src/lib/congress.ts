@@ -25,6 +25,8 @@ type CongressSignal = {
 };
 
 const FINNHUB_BASE = "https://finnhub.io/api/v1/stock/congressional-trading";
+const FMP_BASE = "https://financialmodelingprep.com/stable";
+type CongressProvider = "finnhub" | "fmp" | "not_configured";
 
 function asString(value: unknown): string | null {
   if (typeof value === "string" && value.trim()) return value.trim();
@@ -38,6 +40,16 @@ function firstString(row: RawCongressTrade, keys: string[]): string | null {
     if (value) return value;
   }
   return null;
+}
+
+function nameFromRow(row: RawCongressTrade, keys: string[]): string | null {
+  const direct = firstString(row, keys);
+  if (direct) return direct;
+
+  const first = firstString(row, ["firstName", "first_name", "memberFirstName"]);
+  const last = firstString(row, ["lastName", "last_name", "memberLastName"]);
+  const full = [first, last].filter(Boolean).join(" ").trim();
+  return full || null;
 }
 
 function normalizeDate(value: string | null): string | null {
@@ -85,12 +97,12 @@ function confidenceForTrade(input: { transactionType: string; delay: number | nu
 }
 
 function sourceIdFor(provider: string, ticker: string, row: RawCongressTrade, index: number) {
-  const transactionDate = firstString(row, ["transactionDate", "transaction_date", "transactionDateRaw", "transaction_date_raw"]);
-  const reportDate = firstString(row, ["filingDate", "reportDate", "disclosureDate", "report_date", "filing_date"]);
-  const politician = firstString(row, ["name", "representative", "senator", "member", "politician", "owner"]);
+  const transactionDate = firstString(row, ["transactionDate", "transaction_date", "transactionDateRaw", "transaction_date_raw", "date"]);
+  const reportDate = firstString(row, ["filingDate", "reportDate", "disclosureDate", "reportedDate", "filedDate", "report_date", "filing_date"]);
+  const politician = nameFromRow(row, ["name", "representative", "senator", "member", "politician", "owner", "office"]);
   const txType = firstString(row, ["transaction", "transactionType", "type", "transaction_type"]);
   const amount = firstString(row, ["amount", "amountRange", "range", "value"]);
-  const asset = firstString(row, ["assetDescription", "asset", "asset_description", "description", "security"]);
+  const asset = firstString(row, ["assetDescription", "asset", "asset_description", "description", "security", "assetName", "asset_name"]);
   const fallback = JSON.stringify(row).slice(0, 180);
   return [provider, ticker, transactionDate, reportDate, politician, txType, amount, asset, index, fallback]
     .filter(Boolean)
@@ -114,6 +126,34 @@ async function fetchFinnhubTradesForSymbol(symbol: string, token: string) {
   return { rows: data.slice(0, 25), url };
 }
 
+
+async function fetchFmpTradesForSymbol(symbol: string, token: string) {
+  const endpoints = [
+    { chamber: "House", url: `${FMP_BASE}/house-trades?symbol=${encodeURIComponent(symbol)}&apikey=${encodeURIComponent(token)}` },
+    { chamber: "Senate", url: `${FMP_BASE}/senate-trades?symbol=${encodeURIComponent(symbol)}&apikey=${encodeURIComponent(token)}` }
+  ];
+
+  const results: { rows: RawCongressTrade[]; url: string; chamber: string }[] = [];
+
+  for (const endpoint of endpoints) {
+    const response = await fetch(endpoint.url, {
+      headers: { "User-Agent": "Raven private market scanner" },
+      cache: "no-store"
+    });
+
+    if (!response.ok) {
+      throw new Error(`FMP ${endpoint.chamber.toLowerCase()} trades returned ${response.status} for ${symbol}`);
+    }
+
+    const json = await response.json() as RawCongressTrade[] | { data?: RawCongressTrade[]; error?: unknown; message?: unknown };
+    const rows = Array.isArray(json) ? json : Array.isArray(json.data) ? json.data : [];
+
+    results.push({ rows: rows.slice(0, 50), url: endpoint.url.replace(token, "REDACTED"), chamber: endpoint.chamber });
+  }
+
+  return results;
+}
+
 function normalizeFinnhubRow(symbol: string, row: RawCongressTrade, index: number, sourceUrl: string): CongressSignal {
   const transactionDate = normalizeDate(firstString(row, ["transactionDate", "transaction_date", "transactionDateRaw"]));
   const reportDate = normalizeDate(firstString(row, ["filingDate", "reportDate", "disclosureDate", "filedDate", "filing_date"]));
@@ -126,7 +166,7 @@ function normalizeFinnhubRow(symbol: string, row: RawCongressTrade, index: numbe
     ticker: symbol,
     sourceId: sourceIdFor("finnhub", symbol, row, index),
     provider: "finnhub",
-    politician: firstString(row, ["name", "representative", "senator", "member", "politician", "owner"]),
+    politician: nameFromRow(row, ["name", "representative", "senator", "member", "politician", "owner"]),
     chamber: firstString(row, ["chamber", "office", "branch"]),
     transactionType,
     amountRange,
@@ -134,6 +174,35 @@ function normalizeFinnhubRow(symbol: string, row: RawCongressTrade, index: numbe
     reportDate,
     reportingDelayDays,
     assetDescription: firstString(row, ["assetDescription", "asset", "asset_description", "description", "security"]),
+    priority: confidence >= 58 ? "medium" : "low",
+    materiality: confidence >= 58 ? "possibly_material" : "context",
+    action: "watch_only",
+    confidence,
+    sourceUrl,
+    raw: row
+  };
+}
+
+function normalizeFmpRow(symbol: string, row: RawCongressTrade, index: number, sourceUrl: string, chamber: string): CongressSignal {
+  const transactionDate = normalizeDate(firstString(row, ["transactionDate", "transaction_date", "date"]));
+  const reportDate = normalizeDate(firstString(row, ["disclosureDate", "filingDate", "reportedDate", "reportDate", "filedDate", "filing_date"]));
+  const transactionType = normalizeTransactionType(firstString(row, ["transactionType", "transaction", "type", "transaction_type"]));
+  const amountRange = firstString(row, ["amount", "amountRange", "range", "value"]);
+  const reportingDelayDays = delayDays(transactionDate, reportDate);
+  const confidence = confidenceForTrade({ transactionType, delay: reportingDelayDays, amountRange });
+
+  return {
+    ticker: symbol,
+    sourceId: sourceIdFor(`fmp_${chamber.toLowerCase()}`, symbol, row, index),
+    provider: "fmp",
+    politician: nameFromRow(row, ["representative", "senator", "name", "member", "politician", "owner", "office"]),
+    chamber,
+    transactionType,
+    amountRange,
+    transactionDate,
+    reportDate,
+    reportingDelayDays,
+    assetDescription: firstString(row, ["assetDescription", "asset", "asset_description", "description", "security", "assetName", "asset_name"]),
     priority: confidence >= 58 ? "medium" : "low",
     materiality: confidence >= 58 ? "possibly_material" : "context",
     action: "watch_only",
@@ -259,12 +328,23 @@ async function upsertCongressEvents(signals: CongressSignal[]) {
 
 export async function scanCongressSignals() {
   const startedAt = new Date().toISOString();
-  const token = process.env.FINNHUB_API_KEY?.trim();
-  const provider = token ? "finnhub" : "not_configured";
-  const errors: { ticker?: string; error: string }[] = [];
+  const preferred = (process.env.CONGRESS_PROVIDER || "").trim().toLowerCase();
+  const fmpToken = process.env.FMP_API_KEY?.trim();
+  const finnhubToken = process.env.FINNHUB_API_KEY?.trim();
+  const provider: CongressProvider = preferred === "fmp"
+    ? fmpToken ? "fmp" : "not_configured"
+    : preferred === "finnhub"
+      ? finnhubToken ? "finnhub" : "not_configured"
+      : fmpToken
+        ? "fmp"
+        : finnhubToken
+          ? "finnhub"
+          : "not_configured";
+
+  const errors: { ticker?: string; provider?: string; error: string }[] = [];
   const signals: CongressSignal[] = [];
 
-  if (!token) {
+  if (provider === "not_configured") {
     return {
       phase: "CONGRESS_SCANNER",
       startedAt,
@@ -278,26 +358,45 @@ export async function scanCongressSignals() {
       storage: { saved: 0, skipped: 0, database: hasDatabase() ? "configured" : "not_configured", errors: [] },
       eventsCreatedOrUpdated: 0,
       signals: [],
-      setupRequired: "Add FINNHUB_API_KEY in Vercel to enable congressional trade scanning.",
+      setupRequired: "Add FMP_API_KEY with CONGRESS_PROVIDER=fmp, or add FINNHUB_API_KEY with CONGRESS_PROVIDER=finnhub.",
       errors: []
     };
   }
 
-  for (const item of watchlist) {
-    try {
-      const { rows, url } = await fetchFinnhubTradesForSymbol(item.symbol, token);
-      rows.forEach((row, index) => {
-        signals.push(normalizeFinnhubRow(item.symbol, row, index, url));
-      });
-    } catch (error) {
-      errors.push({ ticker: item.symbol, error: error instanceof Error ? error.message : "unknown congress fetch error" });
+  if (provider === "fmp") {
+    const token = fmpToken as string;
+    for (const item of watchlist) {
+      try {
+        const batches = await fetchFmpTradesForSymbol(item.symbol, token);
+        batches.forEach((batch, batchIndex) => {
+          batch.rows.forEach((row, index) => {
+            signals.push(normalizeFmpRow(item.symbol, row, batchIndex * 1000 + index, batch.url, batch.chamber));
+          });
+        });
+      } catch (error) {
+        errors.push({ ticker: item.symbol, provider, error: error instanceof Error ? error.message : "unknown FMP congress fetch error" });
+      }
+    }
+  }
+
+  if (provider === "finnhub") {
+    const token = finnhubToken as string;
+    for (const item of watchlist) {
+      try {
+        const { rows, url } = await fetchFinnhubTradesForSymbol(item.symbol, token);
+        rows.forEach((row, index) => {
+          signals.push(normalizeFinnhubRow(item.symbol, row, index, url));
+        });
+      } catch (error) {
+        errors.push({ ticker: item.symbol, provider, error: error instanceof Error ? error.message : "unknown Finnhub congress fetch error" });
+      }
     }
   }
 
   const filteredSignals = signals
     .filter((signal) => signal.transactionType === "buy" || signal.transactionType === "sell")
     .filter((signal) => signal.reportingDelayDays === null || signal.reportingDelayDays <= 180)
-    .slice(0, 50);
+    .slice(0, 75);
 
   const storage = await saveCongressSignals(filteredSignals);
   const eventsCreatedOrUpdated = await upsertCongressEvents(filteredSignals);
@@ -318,6 +417,8 @@ export async function scanCongressSignals() {
     eventsCreatedOrUpdated,
     signals: filteredSignals.slice(0, 15).map((signal) => ({
       ticker: signal.ticker,
+      provider: signal.provider,
+      chamber: signal.chamber,
       politician: signal.politician,
       transactionType: signal.transactionType,
       amountRange: signal.amountRange,
