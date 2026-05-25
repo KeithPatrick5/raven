@@ -10,6 +10,7 @@ import { scanFederalRegisterSignals } from "@/lib/federalRegister";
 import { scanFdaSignals } from "@/lib/fda";
 import { scanNewsSignals } from "@/lib/news";
 import { scanCongressSignals } from "@/lib/congress";
+import { syncRadarFromSignalEvents } from "@/lib/radar";
 
 type PipelineStep = {
   name: string;
@@ -132,6 +133,7 @@ export async function runRavenPipeline() {
   steps.push(await runStep("fda", scanFdaSignals));
   steps.push(await runStep("congress", scanCongressSignals));
   steps.push(await runStep("news", scanNewsSignals));
+  steps.push(await runStep("radar_sync", syncRadarFromSignalEvents));
   steps.push(await runStep("score_signals", () => scorePendingSignals(10)));
   steps.push(await runStep("paper_trade_engine", () => runPaperTradeEngine(10)));
   steps.push(await runStep("paper_trade_review", () => reviewOpenPaperTrades(10)));

@@ -387,6 +387,34 @@ export async function ensureRavenTables() {
 
 
   await sql`
+    create table if not exists radar_tickers (
+      id bigserial primary key,
+      ticker text not null unique,
+      source text not null,
+      reason text not null,
+      score integer not null default 0,
+      status text not null default 'active_radar',
+      first_seen timestamptz not null default now(),
+      last_seen timestamptz not null default now(),
+      expires_at timestamptz,
+      evidence jsonb not null default '{}'::jsonb,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now()
+    )
+  `;
+
+  await sql`
+    create index if not exists radar_tickers_status_score_idx
+    on radar_tickers (status, score desc, last_seen desc)
+  `;
+
+  await sql`
+    create index if not exists radar_tickers_last_seen_idx
+    on radar_tickers (last_seen desc)
+  `;
+
+
+  await sql`
     create table if not exists telegram_alerts (
       id bigserial primary key,
       scored_signal_id bigint references scored_signals(id) on delete cascade,

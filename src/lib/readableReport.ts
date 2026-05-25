@@ -72,6 +72,14 @@ function sourceStepLine(run: PipelineLike, name: string, label: string) {
   const rawCount = num(data.rawArticleCount) || num(data.rawEventCount) || num(data.rawCandidateCount) || num(data.rowCount);
   const suppressed = num(data.weakMatchesSuppressed);
 
+  if (name === "radar_sync") {
+    const radarCount = num(data.radarCount);
+    const upserted = num(data.upserted);
+    const scannedEvents = num(data.scannedEvents);
+    const status = found.ok && data.ok !== false ? "ok" : "needs attention";
+    return `${label}: ${status} | ${seconds(found.durationMs)} | active ${radarCount} | updated ${upserted} | scanned ${scannedEvents}`;
+  }
+
   if (name === "congress" && isCongressPaywalled(data)) {
     return `${label}: parked | provider paywalled | no action needed | ${seconds(found.durationMs)}`;
   }
@@ -218,6 +226,7 @@ export function buildPipelineTextReport(run: PipelineLike) {
     sourceStepLine(run, "fda", "FDA"),
     sourceStepLine(run, "congress", "Congress"),
     sourceStepLine(run, "news", "News"),
+    sourceStepLine(run, "radar_sync", "Radar"),
     "",
     "TOP SIGNALS THIS RUN",
     "--------------------",

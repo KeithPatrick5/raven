@@ -629,3 +629,14 @@ h1 {
   color: var(--text);
   font-size: 13px;
 }
+
+.radar-list {
+  display: grid;
+  gap: 10px;
+}
+
+.radar-card {
+  border: 1px solid var(--line-soft);
+  background: rgba(3, 5, 8, 0.42);
+  padding: 12px;
+}

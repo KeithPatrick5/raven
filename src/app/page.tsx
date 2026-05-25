@@ -1,5 +1,6 @@
 import { getLatestPaperDecisions, getLatestPaperTrades } from "@/lib/paper";
 import { getLatestPipelineRuns } from "@/lib/pipelineRuns";
+import { getActiveRadarTickers } from "@/lib/radar";
 import { getLatestScoredSignals } from "@/lib/scoring";
 import { getLatestSignalEvents, getSignalSourceHealth } from "@/lib/signalEvents";
 import { watchlist } from "@/lib/watchlist";
@@ -154,14 +155,23 @@ async function safePipelineRuns() {
   }
 }
 
+async function safeRadarTickers() {
+  try {
+    return await getActiveRadarTickers(8);
+  } catch {
+    return [];
+  }
+}
+
 export default async function Home() {
-  const [signals, signalEvents, sourceHealth, paperTrades, paperDecisions, pipelineRuns] = await Promise.all([
+  const [signals, signalEvents, sourceHealth, paperTrades, paperDecisions, pipelineRuns, radarTickers] = await Promise.all([
     safeSignals(),
     safeSignalEvents(),
     safeSourceHealth(),
     safePaperTrades(),
     safePaperDecisions(),
-    safePipelineRuns()
+    safePipelineRuns(),
+    safeRadarTickers()
   ]);
 
   const latestRun = pipelineRuns[0];
@@ -189,6 +199,7 @@ export default async function Home() {
           <a className="nav-item active" href="#overview">Overview <span className="nav-pill">live</span></a>
           <a className="nav-item" href="#trades">Trades <span className="nav-pill">{openTrades.length}</span></a>
           <a className="nav-item" href="#signals">Signals <span className="nav-pill">{signalEvents.length || signals.length}</span></a>
+          <a className="nav-item" href="#radar">Radar <span className="nav-pill">{radarTickers.length}</span></a>
           <a className="nav-item" href="#decisions">Decisions <span className="nav-pill">{paperDecisions.length}</span></a>
           <a className="nav-item" href="#sources">Sources <span className="nav-pill">{activeSources}</span></a>
           <a className="nav-item" href="#runs">Runs <span className="nav-pill">{pipelineRuns.length}</span></a>
@@ -427,6 +438,45 @@ export default async function Home() {
                 </div>
               ) : (
                 <div className="empty-state">No runs logged.</div>
+              )}
+            </section>
+
+            <section className="panel" id="radar" style={{ marginTop: 14 }}>
+              <div className="panel-header">
+                <div>
+                  <div className="panel-title">Raven radar</div>
+                  <div className="panel-meta">Temporary active tickers from source clusters</div>
+                </div>
+                <span className="badge blue">{radarTickers.length} active</span>
+              </div>
+              {radarTickers.length > 0 ? (
+                <div className="radar-list">
+                  {radarTickers.map((item) => {
+                    const evidence = item.evidence || {};
+                    const sources = Array.isArray(evidence.sources) ? evidence.sources.map(String) : String(item.source || "").split(",").filter(Boolean);
+                    const core = Boolean(evidence.coreWatchlist) || item.status === "core_radar";
+                    return (
+                      <article className="radar-card" key={item.ticker}>
+                        <div className="signal-head">
+                          <div>
+                            <div className="signal-title">{item.ticker} · {core ? "core watchlist" : "radar"}</div>
+                            <div className="panel-meta">Last seen {shortDate(item.last_seen)} · expires {shortDate(item.expires_at)}</div>
+                          </div>
+                          <div className={`score ${scoreTone(item.score)}`}>{item.score}</div>
+                        </div>
+                        <div className="source-row">
+                          {sources.slice(0, 5).map((source) => (
+                            <span className={`source-chip ${sourceTone(source)}`} key={source}>{sourceLabel(source)}</span>
+                          ))}
+                          <span>{cleanLabel(item.status)}</span>
+                        </div>
+                        <p className="signal-copy">{item.reason}</p>
+                      </article>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="empty-state">No radar tickers yet.</div>
               )}
             </section>
 
