@@ -123,34 +123,66 @@ async function getOpenCandidates(limit: number): Promise<CandidateRow[]> {
   const sql = db();
 
   return sql<CandidateRow[]>`
+    with ranked as (
+      select
+        s.id as scored_signal_id,
+        s.confirmation_id,
+        s.ticker,
+        s.accession_number,
+        s.form,
+        s.direction,
+        s.category,
+        s.risk_level,
+        s.ai_tradeability,
+        s.market_confirmation,
+        s.final_score,
+        s.action,
+        s.readable_summary,
+        s.reason_codes,
+        s.risk_flags,
+        c.latest_close,
+        c.price_change_percent,
+        c.relative_volume,
+        c.liquidity_status,
+        c.price_status,
+        row_number() over (partition by upper(s.ticker) order by s.final_score desc, s.created_at desc) as ticker_rank
+      from scored_signals s
+      left join alpaca_market_confirmations c
+        on c.id = s.confirmation_id
+      left join paper_trade_decisions d
+        on d.scored_signal_id = s.id
+      where d.id is null
+        and not exists (
+          select 1
+          from paper_trades pt
+          where upper(pt.ticker) = upper(s.ticker)
+            and pt.status = 'open'
+        )
+    )
     select
-      s.id as scored_signal_id,
-      s.confirmation_id,
-      s.ticker,
-      s.accession_number,
-      s.form,
-      s.direction,
-      s.category,
-      s.risk_level,
-      s.ai_tradeability,
-      s.market_confirmation,
-      s.final_score,
-      s.action,
-      s.readable_summary,
-      s.reason_codes,
-      s.risk_flags,
-      c.latest_close,
-      c.price_change_percent,
-      c.relative_volume,
-      c.liquidity_status,
-      c.price_status
-    from scored_signals s
-    left join alpaca_market_confirmations c
-      on c.id = s.confirmation_id
-    left join paper_trade_decisions d
-      on d.scored_signal_id = s.id
-    where d.id is null
-    order by s.final_score desc, s.created_at desc
+      scored_signal_id,
+      confirmation_id,
+      ticker,
+      accession_number,
+      form,
+      direction,
+      category,
+      risk_level,
+      ai_tradeability,
+      market_confirmation,
+      final_score,
+      action,
+      readable_summary,
+      reason_codes,
+      risk_flags,
+      latest_close,
+      price_change_percent,
+      relative_volume,
+      liquidity_status,
+      price_status
+    from ranked
+    where ticker_rank = 1
+    order by final_score desc, scored_signal_id desc
     limit ${limit}
   `;
 }
@@ -285,38 +317,90 @@ async function openTrade(row: CandidateRow) {
   return inserted[0] || null;
 }
 
-function formatPaperTradeAlert(trade: PaperTrade) {
-  return [
-    "RAVEN PAPER TRADE OPENED",
+type PaperTradeAlertPayload = {
+  ticker: string;
+  side: string;
+  entry_price: number | null;
+  stop_price: number | null;
+  target_price: number | null;
+  final_score: number;
+  decision_reason: string;
+  outcome?: string | null;
+  pnl_percent?: number | null;
+  exit_price?: number | null;
+  close_reason?: string | null;
+};
+
+function formatPaperTradeBatchAlert(trades: PaperTradeAlertPayload[], rejects: Array<Record<string, unknown>>) {
+  const lines = [
+    "RAVEN PAPER TRADE SUMMARY",
     "Live trading: disabled",
+    "Telegram is batched now: one message per run, not one message per trade.",
     "",
-    `${trade.ticker} | ${trade.side.toUpperCase()} | score ${trade.final_score}/100`,
-    `Entry: ${trade.entry_price}`,
-    `Stop: ${trade.stop_price}`,
-    `Target: ${trade.target_price}`,
-    "",
-    `Reason: ${trade.decision_reason}`
-  ].join("\n");
+    `Opened internal paper trades: ${trades.length}`,
+    `Rejected candidates: ${rejects.length}`
+  ];
+
+  if (trades.length) {
+    lines.push("", "OPENED");
+    for (const trade of trades.slice(0, 12)) {
+      lines.push(`- ${trade.ticker} | ${trade.side.toUpperCase()} | score ${trade.final_score}/100 | entry ${trade.entry_price} | stop ${trade.stop_price} | target ${trade.target_price}`);
+    }
+  }
+
+  if (rejects.length) {
+    lines.push("", "TOP REJECTS");
+    for (const reject of rejects.slice(0, 5)) {
+      const codes = Array.isArray(reject.rejects) ? reject.rejects.join(", ") : "unknown";
+      lines.push(`- ${reject.ticker || "UNKNOWN"} | score ${reject.score ?? "?"} | ${codes}`);
+    }
+  }
+
+  lines.push("", "Use Reports -> Paper Trades / Performance for full details.");
+  return lines.join("\n");
 }
 
-function formatPaperTradeCloseAlert(trade: PaperTrade) {
-  return [
-    "RAVEN PAPER TRADE CLOSED",
+function formatPaperTradeCloseBatchAlert(trades: PaperTradeAlertPayload[]) {
+  const wins = trades.filter((trade) => trade.outcome === "win").length;
+  const losses = trades.filter((trade) => trade.outcome === "loss").length;
+  const lines = [
+    "RAVEN PAPER TRADE CLOSE SUMMARY",
     "Live trading: disabled",
     "",
-    `${trade.ticker} | ${trade.side.toUpperCase()} | ${trade.outcome || "closed"}`,
-    `Entry: ${trade.entry_price}`,
-    `Exit: ${trade.exit_price}`,
-    `P/L: ${trade.pnl_percent ?? 0}%`,
-    `Reason: ${trade.close_reason || "review"}`
-  ].join("\n");
+    `Closed trades: ${trades.length}`,
+    `Wins: ${wins} | Losses: ${losses}`
+  ];
+
+  for (const trade of trades.slice(0, 12)) {
+    lines.push(`- ${trade.ticker} | ${trade.outcome || "closed"} | entry ${trade.entry_price} | exit ${trade.exit_price} | P/L ${trade.pnl_percent ?? 0}% | ${trade.close_reason || "review"}`);
+  }
+
+  lines.push("", "Use Reports -> Paper Lifecycle / Performance for full details.");
+  return lines.join("\n");
 }
 
-async function sendTradeAlertIfConfigured(trade: PaperTrade, type: "opened" | "closed" = "opened") {
+async function sendTradeBatchAlertIfConfigured(trades: PaperTradeAlertPayload[], rejects: Array<Record<string, unknown>>) {
   if (!hasTelegramConfig()) return { sent: false, reason: "telegram_not_configured" };
+  if (!trades.length) return { sent: false, reason: "no_opened_trades" };
 
   try {
-    const response = await sendTelegramMessage(type === "closed" ? formatPaperTradeCloseAlert(trade) : formatPaperTradeAlert(trade));
+    const response = await sendTelegramMessage(formatPaperTradeBatchAlert(trades, rejects));
+    return { sent: true, messageId: response.result?.message_id || null };
+  } catch (error) {
+    return {
+      sent: false,
+      reason: "telegram_send_failed",
+      error: error instanceof Error ? error.message : "Unknown Telegram send failure"
+    };
+  }
+}
+
+async function sendCloseBatchAlertIfConfigured(trades: PaperTradeAlertPayload[]) {
+  if (!hasTelegramConfig()) return { sent: false, reason: "telegram_not_configured" };
+  if (!trades.length) return { sent: false, reason: "no_closed_trades" };
+
+  try {
+    const response = await sendTelegramMessage(formatPaperTradeCloseBatchAlert(trades));
     return { sent: true, messageId: response.result?.message_id || null };
   } catch (error) {
     return {
@@ -366,7 +450,6 @@ export async function runPaperTradeEngine(limit = 10) {
     try {
       const trade = await openTrade(row);
       if (trade) {
-        const telegram = await sendTradeAlertIfConfigured(trade);
         trades.push({
           ticker: trade.ticker,
           accessionNumber: trade.accession_number,
@@ -375,8 +458,7 @@ export async function runPaperTradeEngine(limit = 10) {
           entry: trade.entry_price,
           stop: trade.stop_price,
           target: trade.target_price,
-          score: trade.final_score,
-          telegram
+          score: trade.final_score
         });
       }
     } catch (error) {
@@ -388,6 +470,15 @@ export async function runPaperTradeEngine(limit = 10) {
     }
   }
 
+  const telegram = await sendTradeBatchAlertIfConfigured(trades.map((trade) => ({
+    ticker: String(trade.ticker),
+    side: String(trade.side),
+    entry_price: asNumber(trade.entry),
+    stop_price: asNumber(trade.stop),
+    target_price: asNumber(trade.target),
+    final_score: asNumber(trade.score) ?? 0,
+    decision_reason: "Internal paper trade opened."
+  })), rejects);
   const recentDecisions = await getLatestPaperDecisions(10);
   const recentTrades = await getLatestPaperTrades(10);
 
@@ -398,6 +489,7 @@ export async function runPaperTradeEngine(limit = 10) {
     opened: trades.length,
     rejected: rejects.length,
     alreadyLogged: recentDecisions.length,
+    telegram,
     trades,
     rejects,
     recentDecisions,
@@ -529,15 +621,14 @@ export async function reviewOpenPaperTrades(limit = 10) {
       if (verdict.shouldClose && snapshot.latestClose !== null) {
         const closed = await closeTrade(trade, snapshot.latestClose, verdict.reason, verdict.outcome);
         if (closed) {
-          const telegram = await sendTradeAlertIfConfigured(closed, "closed");
           closes.push({
             ticker: closed.ticker,
             side: closed.side,
+            entry: closed.entry_price,
             exit: closed.exit_price,
             outcome: closed.outcome,
             pnlPercent: closed.pnl_percent,
-            reason: closed.close_reason,
-            telegram
+            reason: closed.close_reason
           });
         }
       } else {
@@ -559,6 +650,19 @@ export async function reviewOpenPaperTrades(limit = 10) {
     }
   }
 
+  const telegram = await sendCloseBatchAlertIfConfigured(closes.map((trade) => ({
+    ticker: String(trade.ticker),
+    side: String(trade.side),
+    entry_price: asNumber(trade.entry),
+    stop_price: null,
+    target_price: null,
+    final_score: 0,
+    decision_reason: "Internal paper trade closed.",
+    outcome: typeof trade.outcome === "string" ? trade.outcome : null,
+    pnl_percent: asNumber(trade.pnlPercent),
+    exit_price: asNumber(trade.exit),
+    close_reason: typeof trade.reason === "string" ? trade.reason : null
+  })));
   const recentDecisions = await getLatestPaperDecisions(10);
   const recentTrades = await getLatestPaperTrades(10);
 
@@ -569,6 +673,7 @@ export async function reviewOpenPaperTrades(limit = 10) {
     reviewed: openTrades.length,
     closed: closes.length,
     stillOpen: open.length,
+    telegram,
     closes,
     open,
     recentDecisions,

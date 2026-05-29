@@ -488,16 +488,29 @@ export async function seedPaperTradeCandidates(limit = 16) {
   }
 
   await ensureRavenTables();
-  const candidateSeeds = await getCandidateRankingSeeds(Math.ceil(limit / 2));
-  const anomalySeeds = await getMarketAnomalySeeds(Math.ceil(limit / 2));
-  const deduped = new Map<string, SeedInput>();
+  const candidateSeeds = await getCandidateRankingSeeds(limit);
+  const anomalySeeds = await getMarketAnomalySeeds(limit);
+  const dedupedByTicker = new Map<string, SeedInput>();
 
   for (const seed of [...candidateSeeds, ...anomalySeeds]) {
-    const key = `${cleanTicker(seed.ticker)}:${seed.source}:${seed.sourceId}`;
-    if (!deduped.has(key)) deduped.set(key, seed);
+    const ticker = cleanTicker(seed.ticker);
+    const current = dedupedByTicker.get(ticker);
+    if (!current) {
+      dedupedByTicker.set(ticker, seed);
+      continue;
+    }
+
+    const currentScore = clampScore(current.score);
+    const seedScore = clampScore(seed.score);
+    const seedIsMarketAnomaly = seed.source === "market_anomaly";
+    const currentIsMarketAnomaly = current.source === "market_anomaly";
+
+    if (seedScore > currentScore || (seedScore === currentScore && seedIsMarketAnomaly && !currentIsMarketAnomaly)) {
+      dedupedByTicker.set(ticker, seed);
+    }
   }
 
-  const seeds = Array.from(deduped.values()).slice(0, limit);
+  const seeds = Array.from(dedupedByTicker.values()).slice(0, limit);
   const candidates: Array<Record<string, unknown>> = [];
   const errors: Array<{ ticker?: string; error: string }> = [];
 
