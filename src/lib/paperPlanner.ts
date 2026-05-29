@@ -83,14 +83,14 @@ export type PaperTradePlan = {
   };
 };
 
-const DEFAULT_MAX_NOTIONAL = 1000;
+const DEFAULT_MAX_NOTIONAL = 250;
 const DEFAULT_POSITION_PCT = 1;
-const DEFAULT_MAX_OPEN_POSITIONS = 3;
-const DEFAULT_MAX_DAILY_TRADES = 3;
-const DEFAULT_MAX_DAILY_LOSS_PCT = 2;
-const DEFAULT_MIN_SCORE = 70;
-const DEFAULT_STOP_LOSS_PCT = 4;
-const DEFAULT_TAKE_PROFIT_PCT = 8;
+const DEFAULT_MAX_OPEN_POSITIONS = 10;
+const DEFAULT_MAX_DAILY_TRADES = 10;
+const DEFAULT_MAX_DAILY_LOSS_PCT = 10;
+const DEFAULT_MIN_SCORE = 35;
+const DEFAULT_STOP_LOSS_PCT = 5;
+const DEFAULT_TAKE_PROFIT_PCT = 10;
 const DEFAULT_MAX_HOLD_DAYS = 5;
 
 function asNumber(value: unknown): number | null {
@@ -157,15 +157,15 @@ function riskLimits(): PaperRiskLimits {
 }
 
 function isActionTradeEligible(action: string) {
-  return ["paper_trade_candidate", "high_watch"].includes(action);
+  return !isDangerAction(action);
 }
 
 function isLongEligibleDirection(direction: string) {
-  return direction.toLowerCase() === "bullish";
+  return direction.toLowerCase() !== "bearish";
 }
 
 function isMarketConfirming(status: string) {
-  return status.toLowerCase() === "confirmed";
+  return ["confirmed", "watch", "unconfirmed", "unknown"].includes(status.toLowerCase());
 }
 
 function hasBucketMarketConfirmation(row: PaperPlanCandidate) {
@@ -176,7 +176,7 @@ function hasBucketMarketConfirmation(row: PaperPlanCandidate) {
 }
 
 function isLiquidityAcceptable(status: string | null) {
-  return ["liquid", "active"].includes((status || "").toLowerCase());
+  return !["halted", "untradeable", "blocked"].includes((status || "").toLowerCase());
 }
 
 function isDangerAction(action: string) {
@@ -304,11 +304,11 @@ function planCandidate(
   if (riskState.dailyTradesUsed >= limits.maxDailyTrades) rejectCodes.push("max_daily_trades_reached");
   if (riskState.dailyLossLimitHit) rejectCodes.push("max_daily_loss_reached");
   if (row.final_score < limits.minScore) rejectCodes.push("score_below_minimum");
-  if (!isActionTradeEligible(row.action)) rejectCodes.push("action_not_trade_eligible");
+  if (!isActionTradeEligible(row.action)) rejectCodes.push("danger_action_not_allowed_even_in_paper");
   if (isDangerAction(row.action) || (row.candidate_tier || "") === "risk_only") rejectCodes.push("risk_action_not_long_trade");
-  if (!isLongEligibleDirection(row.direction)) rejectCodes.push("long_only_rejects_non_bullish_signal");
-  if (!isMarketConfirming(row.market_confirmation) && !hasBucketMarketConfirmation(row)) rejectCodes.push("market_not_confirmed");
-  if (!isLiquidityAcceptable(row.liquidity_status)) rejectCodes.push("liquidity_not_strong_enough");
+  if (!isLongEligibleDirection(row.direction)) rejectCodes.push("long_only_rejects_bearish_signal");
+  if (!isMarketConfirming(row.market_confirmation) && !hasBucketMarketConfirmation(row)) reasons.push("Market is not confirmed, but open paper mode allows testing.");
+  if (!isLiquidityAcceptable(row.liquidity_status)) rejectCodes.push("liquidity_blocked_or_untradeable");
   if (latestPrice === null || latestPrice <= 0) rejectCodes.push("missing_latest_price");
   if (equity === null || equity <= 0) rejectCodes.push("missing_account_equity");
   if (cash === null || cash <= 0) rejectCodes.push("missing_cash");
@@ -499,6 +499,7 @@ export async function getPaperTradePlanTextReport(limit = 8) {
   lines.push(`Kill switch: ${result.riskLimits.killSwitch ? "on" : "off"}`);
   lines.push(`Sizing basis: cash/equity only. Buying power is ignored.`);
   lines.push(`Min score: ${result.riskLimits.minScore}`);
+  lines.push("Paper mode is intentionally opened up so Raven collects trade outcome data instead of waiting forever.");
   lines.push(`Max position: ${result.riskLimits.maxPositionPct}% of equity`);
   lines.push(`Max notional: ${money(result.riskLimits.maxNotionalPerTrade)}`);
   lines.push(`Max open positions: ${result.riskLimits.maxOpenPositions}`);
@@ -548,6 +549,7 @@ export async function getPaperRiskTextReport() {
   lines.push("------");
   lines.push(`Kill switch: ${result.riskLimits.killSwitch ? "on" : "off"}`);
   lines.push(`Min score: ${result.riskLimits.minScore}`);
+  lines.push("Paper mode is intentionally opened up so Raven collects trade outcome data instead of waiting forever.");
   lines.push(`Max notional: ${money(result.riskLimits.maxNotionalPerTrade)}`);
   lines.push(`Max position: ${result.riskLimits.maxPositionPct}% of equity`);
   lines.push(`Max open positions: ${result.riskLimits.maxOpenPositions}`);

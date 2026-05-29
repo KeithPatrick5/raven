@@ -67,8 +67,8 @@ function roundMoney(value: number) {
 }
 
 function tradeSide(row: CandidateRow): "long" | null {
-  // Raven v1 is long-only. Bearish signals can protect us from traps later, but they do not open shorts yet.
-  return row.direction.toLowerCase() === "bullish" ? "long" : null;
+  // Raven v1 is still long-only, but paper mode now allows neutral signals so we can collect outcome data.
+  return row.direction.toLowerCase() === "bearish" ? null : "long";
 }
 
 function entryPrice(row: CandidateRow): number | null {
@@ -104,11 +104,11 @@ function decision(row: CandidateRow) {
   reasons.push(`Market confirmation ${row.market_confirmation}.`);
   if (row.liquidity_status) reasons.push(`Liquidity ${row.liquidity_status}.`);
 
-  if (row.final_score < 70) rejects.push("score_below_70");
-  if (!["paper_trade_candidate", "high_watch"].includes(row.action)) rejects.push("action_not_trade_eligible");
-  if (!["confirmed", "watch"].includes(confirmation)) rejects.push("market_not_confirming");
-  if (!["liquid", "active"].includes(liquidity)) rejects.push("liquidity_not_strong_enough");
-  if (!side) rejects.push("long_only_engine_rejects_bearish_or_neutral_signal");
+  if (row.final_score < 35) rejects.push("score_below_35");
+  if (["dilution_watch", "shelf_watch", "late_filing_risk", "danger_watch", "avoid"].includes(row.action)) rejects.push("danger_action_not_allowed_even_in_paper");
+  if (!["confirmed", "watch", "unconfirmed", "unknown", ""].includes(confirmation)) reasons.push(`Market status ${row.market_confirmation} is not ideal, but paper mode allows testing.`);
+  if (["halted", "untradeable", "blocked"].includes(liquidity)) rejects.push("liquidity_blocked_or_untradeable");
+  if (!side) rejects.push("long_only_engine_rejects_bearish_signal");
   if (!entry) rejects.push("missing_entry_price");
 
   return {
