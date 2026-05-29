@@ -19,6 +19,7 @@ import { rankSignalCandidates } from "@/lib/candidateRanking";
 import { scanMarketAnomalies } from "@/lib/marketAnomalies";
 import { routeBestCandidatesToAi } from "@/lib/aiRouter";
 import { syncSignalTruthOutcomes } from "@/lib/signalTruth";
+import { seedPaperTradeCandidates } from "@/lib/paperCandidateSeeder";
 
 type PipelineStep = {
   name: string;
@@ -147,7 +148,8 @@ export async function runRavenPipeline() {
   steps.push(await runStep("news", scanNewsSignals));
   steps.push(await runStep("radar_sync", syncRadarFromSignalEvents));
   steps.push(await runStep("score_signals", () => scorePendingSignals(10)));
-  steps.push(await runStep("paper_trade_engine", () => runPaperTradeEngine(10)));
+  steps.push(await runStep("paper_candidate_seeder", () => seedPaperTradeCandidates(16)));
+  steps.push(await runStep("paper_trade_engine", () => runPaperTradeEngine(16)));
   steps.push(await runStep("paper_order_execution", () => runPaperOrderExecution({ submit: true })));
   steps.push(await runStep("shadow_trade_sync", () => syncShadowTrades(25)));
   steps.push(await runStep("signal_truth_sync", () => syncSignalTruthOutcomes(25)));

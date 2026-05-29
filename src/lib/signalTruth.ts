@@ -118,7 +118,7 @@ async function ensureSignalTruthSeeds(limit = 100) {
       s.final_score,
       s.market_confirmation,
       c.latest_close::text as latest_close,
-      e.source,
+      coalesce(e.source, s.raw_payload->>'seededFrom') as source,
       s.created_at::text as created_at,
       s.raw_payload
     from scored_signals s
@@ -247,23 +247,26 @@ export async function syncSignalTruthOutcomes(limit = 25) {
       ].filter((value): value is number => value !== null);
       const maxFavorable = existingReturns.length ? Math.max(...existingReturns) : null;
       const maxAdverse = existingReturns.length ? Math.min(...existingReturns) : null;
-      const complete = ageHours >= 120;
+      const reachedOneHour = ageHours >= 1;
+      const reachedOneDay = ageHours >= 24;
+      const reachedThreeDays = ageHours >= 72;
+      const reachedFiveDays = ageHours >= 120;
 
       await sql`
         update signal_outcomes set
           latest_price = coalesce(${latestPrice}, latest_price),
           latest_return_percent = coalesce(${latestReturn}, latest_return_percent),
-          one_hour_price = case when one_hour_price is null and ${ageHours} >= 1 then coalesce(${latestPrice}, one_hour_price) else one_hour_price end,
-          one_hour_return_percent = case when one_hour_return_percent is null and ${ageHours} >= 1 then coalesce(${latestReturn}, one_hour_return_percent) else one_hour_return_percent end,
-          one_day_price = case when one_day_price is null and ${ageHours} >= 24 then coalesce(${latestPrice}, one_day_price) else one_day_price end,
-          one_day_return_percent = case when one_day_return_percent is null and ${ageHours} >= 24 then coalesce(${latestReturn}, one_day_return_percent) else one_day_return_percent end,
-          three_day_price = case when three_day_price is null and ${ageHours} >= 72 then coalesce(${latestPrice}, three_day_price) else three_day_price end,
-          three_day_return_percent = case when three_day_return_percent is null and ${ageHours} >= 72 then coalesce(${latestReturn}, three_day_return_percent) else three_day_return_percent end,
-          five_day_price = case when five_day_price is null and ${ageHours} >= 120 then coalesce(${latestPrice}, five_day_price) else five_day_price end,
-          five_day_return_percent = case when five_day_return_percent is null and ${ageHours} >= 120 then coalesce(${latestReturn}, five_day_return_percent) else five_day_return_percent end,
+          one_hour_price = case when one_hour_price is null and ${reachedOneHour} then coalesce(${latestPrice}, one_hour_price) else one_hour_price end,
+          one_hour_return_percent = case when one_hour_return_percent is null and ${reachedOneHour} then coalesce(${latestReturn}, one_hour_return_percent) else one_hour_return_percent end,
+          one_day_price = case when one_day_price is null and ${reachedOneDay} then coalesce(${latestPrice}, one_day_price) else one_day_price end,
+          one_day_return_percent = case when one_day_return_percent is null and ${reachedOneDay} then coalesce(${latestReturn}, one_day_return_percent) else one_day_return_percent end,
+          three_day_price = case when three_day_price is null and ${reachedThreeDays} then coalesce(${latestPrice}, three_day_price) else three_day_price end,
+          three_day_return_percent = case when three_day_return_percent is null and ${reachedThreeDays} then coalesce(${latestReturn}, three_day_return_percent) else three_day_return_percent end,
+          five_day_price = case when five_day_price is null and ${reachedFiveDays} then coalesce(${latestPrice}, five_day_price) else five_day_price end,
+          five_day_return_percent = case when five_day_return_percent is null and ${reachedFiveDays} then coalesce(${latestReturn}, five_day_return_percent) else five_day_return_percent end,
           max_favorable_return_percent = coalesce(${round(maxFavorable)}, max_favorable_return_percent),
           max_adverse_return_percent = coalesce(${round(maxAdverse)}, max_adverse_return_percent),
-          status = case when ${complete} then 'complete_5d' else 'tracking' end,
+          status = case when ${reachedFiveDays} then 'complete_5d' else 'tracking' end,
           last_checked_at = now(),
           updated_at = now(),
           raw_payload = raw_payload || ${JSON.stringify({ lastSync: new Date().toISOString(), latestPrice, latestReturn, ageHours: round(ageHours, 2) })}::jsonb
