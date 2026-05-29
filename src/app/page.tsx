@@ -288,6 +288,14 @@ export default async function Home() {
   const performanceRejects = performance?.rejects as { count: number; topReasons: Array<{ name: string; count: number }> } | undefined;
   const performanceOrders = performance?.orders as { submitted: number; filled: number; rejected: number; error: number } | undefined;
   const aiUsage = aiUsageSnapshot && aiUsageSnapshot.ok ? aiUsageSnapshot as any : null;
+  const engineStatus = cronStatus?.latestRun
+    ? cronStatus.latestRun.ageMinutes <= 35
+      ? "ON"
+      : "STALE"
+    : "UNKNOWN";
+  const engineStatusClass = engineStatus === "ON" ? "text-green" : engineStatus === "STALE" ? "text-amber" : "text-red";
+  const paperOrderStatus = tradingSafety.paperOrderSubmission === "enabled" ? "ON" : tradingSafety.paperOrderSubmission.toUpperCase();
+  const paperOrderStatusClass = tradingSafety.paperOrderSubmission === "enabled" ? "text-green" : tradingSafety.paperOrderSubmission === "blocked" ? "text-red" : "text-amber";
 
   return (
     <main className="raven-shell">
@@ -301,7 +309,7 @@ export default async function Home() {
         </div>
 
         <nav className="nav" aria-label="Raven navigation">
-          <a className="nav-item active" href="#overview">Overview <span className="nav-pill">live</span></a>
+          <a className="nav-item active" href="#overview">Overview <span className="nav-pill">{engineStatus.toLowerCase()}</span></a>
           <a className="nav-item" href="/reports">Reports <span className="nav-pill">new</span></a>
           <a className="nav-item" href="#performance">Performance <span className="nav-pill">24h</span></a>
           <a className="nav-item" href="#cron">Cron <span className="nav-pill">{cronStatus?.latestRun ? `#${cronStatus.latestRun.id}` : "--"}</span></a>
@@ -319,10 +327,10 @@ export default async function Home() {
           <a className="nav-item" href="#watchlist">Watchlist <span className="nav-pill">{watchlist.length}</span></a>
         </nav>
 
-        <div className="sidebar-footer compact-status">
-          <div><span>Live</span><strong>OFF</strong></div>
-          <div><span>Mode</span><strong>Paper</strong></div>
-          <div><span>Alerts</span><strong>Trades</strong></div>
+        <div className="sidebar-footer compact-status" aria-label="Raven status">
+          <div><span>Engine</span><strong className={engineStatusClass}>{engineStatus}</strong></div>
+          <div><span>Mode</span><strong>{tradingSafety.mode.toUpperCase()}</strong></div>
+          <div><span>Paper orders</span><strong className={paperOrderStatusClass}>{paperOrderStatus}</strong></div>
         </div>
       </aside>
 

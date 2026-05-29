@@ -49,6 +49,10 @@ input {
   position: sticky;
   top: 0;
   height: 100vh;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .brand {
@@ -88,6 +92,10 @@ input {
   display: grid;
   gap: 4px;
   margin-top: 18px;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 2px;
+  scrollbar-width: thin;
 }
 
 .nav-item {
@@ -97,7 +105,10 @@ input {
   padding: 9px 10px;
   display: flex;
   justify-content: space-between;
+  align-items: center;
+  gap: 10px;
   background: transparent;
+  min-width: 0;
 }
 
 .nav-item.active,
@@ -110,13 +121,13 @@ input {
 .nav-pill {
   color: var(--dim);
   font-size: 11px;
+  flex: 0 0 auto;
 }
 
 .sidebar-footer {
-  position: absolute;
-  bottom: 18px;
-  left: 14px;
-  right: 14px;
+  position: static;
+  margin-top: 12px;
+  flex-shrink: 0;
   border: 1px solid var(--line-soft);
   background: rgba(11, 16, 22, 0.78);
   padding: 12px;
@@ -412,6 +423,7 @@ h1 {
     height: auto;
     border-right: 0;
     border-bottom: 1px solid var(--line);
+    overflow: visible;
   }
 
   .sidebar-footer {
@@ -681,6 +693,7 @@ body {
     padding: 10px 10px 8px;
     background: rgba(5, 8, 12, 0.97);
     backdrop-filter: blur(16px);
+    overflow: visible;
   }
 
   .brand {
@@ -705,6 +718,7 @@ body {
     gap: 7px;
     margin-top: 9px;
     overflow-x: auto;
+    overflow-y: hidden;
     padding-bottom: 4px;
     scrollbar-width: none;
     -webkit-overflow-scrolling: touch;
