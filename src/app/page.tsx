@@ -302,6 +302,7 @@ export default async function Home() {
 
         <nav className="nav" aria-label="Raven navigation">
           <a className="nav-item active" href="#overview">Overview <span className="nav-pill">live</span></a>
+          <a className="nav-item" href="/reports">Reports <span className="nav-pill">new</span></a>
           <a className="nav-item" href="#performance">Performance <span className="nav-pill">24h</span></a>
           <a className="nav-item" href="#cron">Cron <span className="nav-pill">{cronStatus?.latestRun ? `#${cronStatus.latestRun.id}` : "--"}</span></a>
           <a className="nav-item" href="#ai-usage">AI usage <span className="nav-pill">{aiUsage?.calls.total || 0}</span></a>
@@ -332,6 +333,7 @@ export default async function Home() {
             <h1>Trading engine</h1>
           </div>
           <div className="top-actions">
+            <a className="badge blue" href="/reports">Reports</a>
             <a className="badge green" href="/api/run/pipeline">Run now</a>
             <form action="/api/logout" method="post">
               <button className="ghost-button" type="submit">Lock</button>

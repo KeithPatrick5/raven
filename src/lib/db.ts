@@ -633,6 +633,90 @@ export async function ensureRavenTables() {
   `;
 
 
+
+
+  await sql`
+    create table if not exists signal_outcomes (
+      id bigserial primary key,
+      scored_signal_id bigint not null unique references scored_signals(id) on delete cascade,
+      accession_number text not null,
+      ticker text not null,
+      source text not null default 'SEC',
+      form text,
+      category text,
+      direction text not null default 'neutral',
+      action text not null default 'watch_only',
+      final_score integer not null default 0,
+      score_bucket text not null default 'unknown',
+      market_confirmation text,
+      entry_price numeric,
+      latest_price numeric,
+      latest_return_percent numeric,
+      one_hour_price numeric,
+      one_hour_return_percent numeric,
+      one_day_price numeric,
+      one_day_return_percent numeric,
+      three_day_price numeric,
+      three_day_return_percent numeric,
+      five_day_price numeric,
+      five_day_return_percent numeric,
+      max_favorable_return_percent numeric,
+      max_adverse_return_percent numeric,
+      status text not null default 'tracking',
+      source_created_at timestamptz not null default now(),
+      last_checked_at timestamptz,
+      raw_payload jsonb not null default '{}'::jsonb,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now()
+    )
+  `;
+
+  await sql`alter table signal_outcomes add column if not exists scored_signal_id bigint`;
+  await sql`alter table signal_outcomes add column if not exists accession_number text`;
+  await sql`alter table signal_outcomes add column if not exists ticker text`;
+  await sql`alter table signal_outcomes add column if not exists source text not null default 'SEC'`;
+  await sql`alter table signal_outcomes add column if not exists form text`;
+  await sql`alter table signal_outcomes add column if not exists category text`;
+  await sql`alter table signal_outcomes add column if not exists direction text not null default 'neutral'`;
+  await sql`alter table signal_outcomes add column if not exists action text not null default 'watch_only'`;
+  await sql`alter table signal_outcomes add column if not exists final_score integer not null default 0`;
+  await sql`alter table signal_outcomes add column if not exists score_bucket text not null default 'unknown'`;
+  await sql`alter table signal_outcomes add column if not exists market_confirmation text`;
+  await sql`alter table signal_outcomes add column if not exists entry_price numeric`;
+  await sql`alter table signal_outcomes add column if not exists latest_price numeric`;
+  await sql`alter table signal_outcomes add column if not exists latest_return_percent numeric`;
+  await sql`alter table signal_outcomes add column if not exists one_hour_price numeric`;
+  await sql`alter table signal_outcomes add column if not exists one_hour_return_percent numeric`;
+  await sql`alter table signal_outcomes add column if not exists one_day_price numeric`;
+  await sql`alter table signal_outcomes add column if not exists one_day_return_percent numeric`;
+  await sql`alter table signal_outcomes add column if not exists three_day_price numeric`;
+  await sql`alter table signal_outcomes add column if not exists three_day_return_percent numeric`;
+  await sql`alter table signal_outcomes add column if not exists five_day_price numeric`;
+  await sql`alter table signal_outcomes add column if not exists five_day_return_percent numeric`;
+  await sql`alter table signal_outcomes add column if not exists max_favorable_return_percent numeric`;
+  await sql`alter table signal_outcomes add column if not exists max_adverse_return_percent numeric`;
+  await sql`alter table signal_outcomes add column if not exists status text not null default 'tracking'`;
+  await sql`alter table signal_outcomes add column if not exists source_created_at timestamptz not null default now()`;
+  await sql`alter table signal_outcomes add column if not exists last_checked_at timestamptz`;
+  await sql`alter table signal_outcomes add column if not exists raw_payload jsonb not null default '{}'::jsonb`;
+  await sql`alter table signal_outcomes add column if not exists created_at timestamptz not null default now()`;
+  await sql`alter table signal_outcomes add column if not exists updated_at timestamptz not null default now()`;
+
+  await sql`
+    create index if not exists signal_outcomes_created_idx
+    on signal_outcomes (created_at desc)
+  `;
+
+  await sql`
+    create index if not exists signal_outcomes_ticker_created_idx
+    on signal_outcomes (ticker, created_at desc)
+  `;
+
+  await sql`
+    create index if not exists signal_outcomes_source_action_idx
+    on signal_outcomes (source, action, created_at desc)
+  `;
+
   await sql`
     create table if not exists pipeline_runs (
       id bigserial primary key,

@@ -1072,3 +1072,87 @@ body {
     grid-template-columns: repeat(2, 1fr);
   }
 }
+
+
+.report-stack {
+  display: grid;
+  gap: 14px;
+}
+
+.report-panel {
+  margin-bottom: 0;
+}
+
+.report-button-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 10px;
+  padding: 13px;
+}
+
+.compact-report-grid {
+  padding-top: 0;
+}
+
+.report-button {
+  border: 1px solid var(--line-soft);
+  background: rgba(16, 24, 33, 0.82);
+  padding: 12px;
+  min-height: 68px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.report-button:hover {
+  border-color: var(--line);
+  background: rgba(23, 34, 46, 0.9);
+}
+
+.report-button span {
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.report-button small {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.report-button.green {
+  border-color: rgba(73, 209, 125, 0.28);
+}
+
+.report-button.green span {
+  color: var(--green);
+}
+
+.report-button.amber {
+  border-color: rgba(243, 184, 75, 0.3);
+}
+
+.report-button.amber span {
+  color: var(--amber);
+}
+
+.report-button.red {
+  border-color: rgba(240, 93, 93, 0.3);
+}
+
+.report-button.red span {
+  color: var(--red);
+}
+
+.report-button.blue span {
+  color: var(--blue);
+}
+
+.truth-hero {
+  margin-bottom: 14px;
+}
+
+.section-spacer {
+  height: 2px;
+}
