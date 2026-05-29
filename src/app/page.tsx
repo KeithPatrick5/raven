@@ -294,8 +294,10 @@ export default async function Home() {
       : "STALE"
     : "UNKNOWN";
   const engineStatusClass = engineStatus === "ON" ? "text-green" : engineStatus === "STALE" ? "text-amber" : "text-red";
-  const paperOrderStatus = tradingSafety.paperOrderSubmission === "enabled" ? "ON" : tradingSafety.paperOrderSubmission.toUpperCase();
-  const paperOrderStatusClass = tradingSafety.paperOrderSubmission === "enabled" ? "text-green" : tradingSafety.paperOrderSubmission === "blocked" ? "text-red" : "text-amber";
+  const safetyMode = tradingSafety?.mode ?? "paper";
+  const paperOrderSubmission = tradingSafety?.paperOrderSubmission ?? "unknown";
+  const paperOrderStatus = paperOrderSubmission === "enabled" ? "ON" : paperOrderSubmission.toUpperCase();
+  const paperOrderStatusClass = paperOrderSubmission === "enabled" ? "text-green" : paperOrderSubmission === "blocked" ? "text-red" : "text-amber";
 
   return (
     <main className="raven-shell">
@@ -329,7 +331,7 @@ export default async function Home() {
 
         <div className="sidebar-footer compact-status" aria-label="Raven status">
           <div><span>Engine</span><strong className={engineStatusClass}>{engineStatus}</strong></div>
-          <div><span>Mode</span><strong>{tradingSafety.mode.toUpperCase()}</strong></div>
+          <div><span>Mode</span><strong>{safetyMode.toUpperCase()}</strong></div>
           <div><span>Paper orders</span><strong className={paperOrderStatusClass}>{paperOrderStatus}</strong></div>
         </div>
       </aside>
