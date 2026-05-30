@@ -1,5 +1,6 @@
 import { getAlpacaPaperSnapshot, type PaperAccountSnapshot } from "@/lib/alpacaTrading";
 import { getLatestPaperDecisions, getLatestPaperTrades } from "@/lib/paper";
+import { getPaperLedgerSnapshot } from "@/lib/paperLedger";
 import { getPaperTradePlan } from "@/lib/paperPlanner";
 import { runPaperOrderExecution } from "@/lib/paperExecution";
 import { getPaperPositionLifecycle } from "@/lib/paperLifecycle";
@@ -183,6 +184,14 @@ async function safePaperDecisions() {
   }
 }
 
+async function safePaperLedger() {
+  try {
+    return await getPaperLedgerSnapshot();
+  } catch {
+    return null;
+  }
+}
+
 async function safePaperPlan() {
   try {
     return await getPaperTradePlan(5);
@@ -264,8 +273,9 @@ async function safeCronStatus() {
 }
 
 export default async function Home() {
-  const [paperAccount, paperPlan, paperExecution, paperLifecycle, tradingSafety, signals, signalEvents, sourceHealth, paperTrades, paperDecisions, pipelineRuns, radarTickers, performanceSnapshot, aiUsageSnapshot, aiRouterSnapshot, cronStatus] = await Promise.all([
+  const [paperAccount, paperLedger, paperPlan, paperExecution, paperLifecycle, tradingSafety, signals, signalEvents, sourceHealth, paperTrades, paperDecisions, pipelineRuns, radarTickers, performanceSnapshot, aiUsageSnapshot, aiRouterSnapshot, cronStatus] = await Promise.all([
     safeAlpacaPaperAccount(),
+    safePaperLedger(),
     safePaperPlan(),
     safePaperExecution(),
     safePaperLifecycle(),
@@ -427,14 +437,19 @@ export default async function Home() {
             <div className="kpi-note">{latestRun ? `${shortDate(latestRun.created_at)} · ${seconds(latestRun.duration_ms)}` : "No runs yet"}</div>
           </div>
           <div className="kpi">
-            <div className="kpi-label">Paper equity</div>
+            <div className="kpi-label">Raven sim equity</div>
+            <div className={`kpi-value ${(paperLedger?.currentEquity ?? 100000) >= (paperLedger?.startingBalance ?? 100000) ? "text-green" : "text-red"}`}>{paperLedger ? money(paperLedger.currentEquity) : "--"}</div>
+            <div className="kpi-note">realized {paperLedger ? signedMoney(paperLedger.realizedPnl) : "--"} · unrealized {paperLedger ? signedMoney(paperLedger.unrealizedPnl) : "--"}</div>
+          </div>
+          <div className="kpi">
+            <div className="kpi-label">Alpaca paper</div>
             <div className={`kpi-value text-${paperAccountTone(paperAccount)}`}>{paperAccount ? money(paperAccount.summary.equity) : "--"}</div>
-            <div className="kpi-note">cash {paperAccount ? money(paperAccount.summary.cash) : "--"}</div>
+            <div className="kpi-note">cash {paperAccount ? money(paperAccount.summary.cash) : "--"} · orders {paperAccount ? paperAccount.summary.openOrderCount : 0}</div>
           </div>
           <div className="kpi">
             <div className="kpi-label">Open trades</div>
-            <div className="kpi-value">{paperAccount ? paperAccount.summary.openPositionCount : openTrades.length}</div>
-            <div className="kpi-note">orders {paperAccount ? paperAccount.summary.openOrderCount : 0} · exits {paperLifecycle?.pendingExits || 0}</div>
+            <div className="kpi-value">{paperLedger ? paperLedger.openTrades : openTrades.length}</div>
+            <div className="kpi-note">exposure {paperLedger ? money(paperLedger.openExposure) : "--"} · exits {paperLifecycle?.pendingExits || 0}</div>
           </div>
           <div className="kpi">
             <div className="kpi-label">Latest decision</div>
@@ -503,8 +518,55 @@ export default async function Home() {
             <section className="panel" id="account">
               <div className="panel-header">
                 <div>
+                  <div className="panel-title">Raven paper ledger</div>
+                  <div className="panel-meta">Internal paper balance calculated from Raven's simulated trades. Alpaca paper account is shown separately below.</div>
+                </div>
+                <span className="badge green">sim</span>
+              </div>
+              {paperLedger ? (
+                <>
+                  <div className="run-summary run-summary-tight">
+                    <div><span>Starting balance</span><strong>{money(paperLedger.startingBalance)}</strong></div>
+                    <div><span>Current equity</span><strong className={paperLedger.currentEquity >= paperLedger.startingBalance ? "text-green" : "text-red"}>{money(paperLedger.currentEquity)}</strong></div>
+                    <div><span>Cash after exposure</span><strong>{money(paperLedger.cash)}</strong></div>
+                    <div><span>Open exposure</span><strong>{money(paperLedger.openExposure)}</strong></div>
+                    <div><span>Realized P/L</span><strong className={paperLedger.realizedPnl >= 0 ? "text-green" : "text-red"}>{signedMoney(paperLedger.realizedPnl)}</strong></div>
+                    <div><span>Unrealized P/L</span><strong className={paperLedger.unrealizedPnl >= 0 ? "text-green" : "text-red"}>{signedMoney(paperLedger.unrealizedPnl)}</strong></div>
+                    <div><span>Closed trades</span><strong>{paperLedger.closedTrades}</strong></div>
+                    <div><span>Win rate</span><strong>{paperLedger.winRate === null ? "--" : `${paperLedger.winRate}%`}</strong></div>
+                  </div>
+                  {paperLedger.trades.length > 0 ? (
+                    <div className="signal-list">
+                      {paperLedger.trades.slice(0, 6).map((trade) => (
+                        <article className="signal-card" key={`${trade.ticker}-${trade.entryPrice}-${trade.notional}`}>
+                          <div className="signal-head">
+                            <div>
+                              <div className="signal-title">{trade.ticker} · {trade.side}</div>
+                              <div className="panel-meta">{money(trade.notional)} notional · entry {trade.entryPrice} · latest {trade.currentPrice ?? "--"}</div>
+                            </div>
+                            <div className={`score ${trade.unrealizedPnl >= 0 ? "green" : "red"}`}>{signedMoney(trade.unrealizedPnl)}</div>
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="empty-state">No open Raven sim trades.</div>
+                  )}
+                  <div className="market-strip" style={{ padding: "0 13px 12px" }}>
+                    <a className="badge blue" href="/api/paper/ledger/report">Ledger report</a>
+                    <a className="badge blue" href="/api/paper/ledger">Ledger JSON</a>
+                  </div>
+                </>
+              ) : (
+                <div className="empty-state">Raven paper ledger unavailable.</div>
+              )}
+            </section>
+
+            <section className="panel" id="alpaca-account">
+              <div className="panel-header">
+                <div>
                   <div className="panel-title">Alpaca paper account</div>
-                  <div className="panel-meta">Read-only. No orders are submitted in 13A.</div>
+                  <div className="panel-meta">Broker paper snapshot from Alpaca. This moves only when Alpaca paper orders fill or positions mark to market.</div>
                 </div>
                 <span className={`badge ${paperAccountTone(paperAccount)}`}>{paperAccount?.configured ? "connected" : "not configured"}</span>
               </div>

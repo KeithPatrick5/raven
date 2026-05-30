@@ -149,6 +149,7 @@ export default function ReportsClient({ truth }: { truth: TruthSummary }) {
         reportButton("Latest performance", "performance", "/api/performance/report?window=24h", "/api/performance?window=24h", "24h", "operator health", "blue"),
         reportButton("Cron health", "cron", "/api/cron/status/report", "/api/cron/status", undefined, "schedule + last run", "blue"),
         reportButton("Signal Truth 7d", "signal-truth", "/api/signals/truth/report?window=7d&sync=1", "/api/signals/truth?window=7d&sync=1", "7d", "prove the edge", "green"),
+        directButton("Paper ledger", "/api/paper/ledger/report", "Raven sim equity + P/L", "green"),
         reportButton("Paper account", "paper-account", "/api/paper/report", "/api/paper/account", undefined, "Alpaca paper snapshot", "blue"),
         reportButton("Paper plan", "paper-plan", "/api/paper/plan/report", "/api/paper/plan", undefined, "would-trade + rejects", "blue"),
         reportButton("Safety / risk", "paper-risk", "/api/paper/risk/report", "/api/paper/risk", undefined, "limits + guardrails", "amber"),
@@ -169,6 +170,8 @@ export default function ReportsClient({ truth }: { truth: TruthSummary }) {
       title: "Paper trading",
       meta: "Paper account, planning, risk, execution switch, lifecycle, and debug JSON.",
       buttons: [
+        directButton("Paper ledger report", "/api/paper/ledger/report", "Raven sim balance", "green"),
+        directButton("Paper ledger JSON", "/api/paper/ledger", "raw sim balance"),
         reportButton("Paper account", "paper-account", "/api/paper/report", "/api/paper/account"),
         reportButton("Trade plan", "paper-plan", "/api/paper/plan/report", "/api/paper/plan"),
         reportButton("Risk limits", "paper-risk", "/api/paper/risk/report", "/api/paper/risk", undefined, "guardrails", "amber"),

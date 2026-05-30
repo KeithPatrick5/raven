@@ -43,6 +43,7 @@ type PaperTrade = {
   close_reason?: string | null;
   outcome?: string | null;
   pnl_percent?: number | null;
+  notional?: number | null;
 };
 
 type OpenTradeRow = PaperTrade & {
@@ -290,7 +291,8 @@ async function openTrade(row: CandidateRow) {
       target_price,
       final_score,
       decision_reason,
-      raw_payload
+      raw_payload,
+      notional
     ) values (
       ${row.scored_signal_id},
       ${row.confirmation_id},
@@ -322,7 +324,8 @@ async function openTrade(row: CandidateRow) {
           liquidityStatus: row.liquidity_status,
           priceStatus: row.price_status
         }
-      })}::jsonb
+      })}::jsonb,
+      ${paperTradeNotional()}
     )
     on conflict (scored_signal_id) do nothing
     returning
@@ -337,7 +340,8 @@ async function openTrade(row: CandidateRow) {
       target_price,
       final_score,
       decision_reason,
-      opened_at::text as opened_at
+      opened_at::text as opened_at,
+      notional
   `;
 
   return inserted[0] || null;
@@ -557,7 +561,8 @@ async function getOpenTrades(limit: number): Promise<OpenTradeRow[]> {
       closed_at::text as closed_at,
       close_reason,
       outcome,
-      pnl_percent
+      pnl_percent,
+      notional
     from paper_trades
     where status = 'open'
     order by opened_at asc
@@ -597,7 +602,8 @@ async function closeTrade(trade: OpenTradeRow, exitPrice: number, closeReason: s
       closed_at::text as closed_at,
       close_reason,
       outcome,
-      pnl_percent
+      pnl_percent,
+      notional
   `;
 
   return updated[0] || null;
@@ -743,6 +749,7 @@ export async function getLatestPaperTrades(limit = 10) {
     close_reason: string | null;
     outcome: string | null;
     pnl_percent: number | null;
+    notional: number | null;
   }>>`
     select
       ticker,
@@ -759,7 +766,8 @@ export async function getLatestPaperTrades(limit = 10) {
       closed_at::text as closed_at,
       close_reason,
       outcome,
-      pnl_percent
+      pnl_percent,
+      notional
     from paper_trades
     order by opened_at desc
     limit ${limit}

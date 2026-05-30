@@ -522,6 +522,7 @@ export async function ensureRavenTables() {
   await sql`alter table paper_trades add column if not exists close_reason text`;
   await sql`alter table paper_trades add column if not exists outcome text`;
   await sql`alter table paper_trades add column if not exists pnl_percent numeric`;
+  await sql`alter table paper_trades add column if not exists notional numeric`;
 
   await sql`
     create index if not exists paper_trades_status_opened_idx
