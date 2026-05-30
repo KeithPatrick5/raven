@@ -1433,3 +1433,47 @@ body {
     font-size: 15px;
   }
 }
+
+.ai-usage-grid-wide {
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+}
+
+.readable-stat.green strong {
+  color: var(--green);
+}
+
+.readable-stat.red strong {
+  color: var(--red);
+}
+
+.readable-stat.amber strong {
+  color: var(--amber);
+}
+
+.readable-stat.blue strong {
+  color: var(--blue);
+}
+
+.raw-json-panel details {
+  padding: 0 16px 16px;
+}
+
+.raw-json-panel summary {
+  color: var(--text);
+  cursor: pointer;
+  font-size: 13px;
+  margin-bottom: 10px;
+}
+
+.raw-json-copy {
+  margin: 0;
+  max-height: 560px;
+  white-space: pre;
+}
+
+.button-reset {
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+}

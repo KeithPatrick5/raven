@@ -66,6 +66,32 @@ function roundMoney(value: number) {
   return round(value, 2);
 }
 
+function envNumber(name: string, fallback: number) {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function money(value: number | null | undefined) {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "--";
+  return `$${value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function paperTradeNotional() {
+  return Math.max(1, envNumber("RAVEN_MAX_NOTIONAL_PER_TRADE", 1000));
+}
+
+function tradeRiskDollars(trade: PaperTradeAlertPayload, notional: number) {
+  if (!trade.entry_price || !trade.stop_price || trade.entry_price <= 0) return null;
+  return Math.abs((trade.entry_price - trade.stop_price) / trade.entry_price) * notional;
+}
+
+function tradeTargetDollars(trade: PaperTradeAlertPayload, notional: number) {
+  if (!trade.entry_price || !trade.target_price || trade.entry_price <= 0) return null;
+  return Math.abs((trade.target_price - trade.entry_price) / trade.entry_price) * notional;
+}
+
 function tradeSide(row: CandidateRow): "long" | null {
   // Raven v1 is still long-only, but paper mode now allows neutral signals so we can collect outcome data.
   return row.direction.toLowerCase() === "bearish" ? null : "long";
@@ -332,19 +358,28 @@ type PaperTradeAlertPayload = {
 };
 
 function formatPaperTradeBatchAlert(trades: PaperTradeAlertPayload[], rejects: Array<Record<string, unknown>>) {
+  const notional = paperTradeNotional();
+  const plannedExposure = trades.length * notional;
+  const estimatedRisk = trades.reduce((sum, trade) => sum + (tradeRiskDollars(trade, notional) || 0), 0);
+  const estimatedTarget = trades.reduce((sum, trade) => sum + (tradeTargetDollars(trade, notional) || 0), 0);
   const lines = [
     "RAVEN PAPER TRADE SUMMARY",
     "Live trading: disabled",
-    "Telegram is batched now: one message per run, not one message per trade.",
+    "Mode: internal paper trade log",
     "",
     `Opened internal paper trades: ${trades.length}`,
-    `Rejected candidates: ${rejects.length}`
+    `Rejected candidates: ${rejects.length}`,
+    `Planned paper exposure: ${money(plannedExposure)}`,
+    `Estimated risk to stops: ${money(estimatedRisk)}`,
+    `Estimated target upside: ${money(estimatedTarget)}`
   ];
 
   if (trades.length) {
     lines.push("", "OPENED");
     for (const trade of trades.slice(0, 12)) {
-      lines.push(`- ${trade.ticker} | ${trade.side.toUpperCase()} | score ${trade.final_score}/100 | entry ${trade.entry_price} | stop ${trade.stop_price} | target ${trade.target_price}`);
+      const risk = tradeRiskDollars(trade, notional);
+      const target = tradeTargetDollars(trade, notional);
+      lines.push(`- ${trade.ticker} | ${trade.side.toUpperCase()} | score ${trade.final_score}/100 | ${money(notional)} notional | risk ${money(risk)} | target ${money(target)}`);
     }
   }
 
@@ -356,23 +391,27 @@ function formatPaperTradeBatchAlert(trades: PaperTradeAlertPayload[], rejects: A
     }
   }
 
-  lines.push("", "Use Reports -> Paper Trades / Performance for full details.");
+  lines.push("", "Actual Alpaca paper orders are tracked separately in Reports -> Paper Lifecycle.");
   return lines.join("\n");
 }
 
 function formatPaperTradeCloseBatchAlert(trades: PaperTradeAlertPayload[]) {
+  const notional = paperTradeNotional();
   const wins = trades.filter((trade) => trade.outcome === "win").length;
   const losses = trades.filter((trade) => trade.outcome === "loss").length;
+  const estimatedPnl = trades.reduce((sum, trade) => sum + ((trade.pnl_percent || 0) / 100) * notional, 0);
   const lines = [
     "RAVEN PAPER TRADE CLOSE SUMMARY",
     "Live trading: disabled",
     "",
-    `Closed trades: ${trades.length}`,
-    `Wins: ${wins} | Losses: ${losses}`
+    `Closed internal paper trades: ${trades.length}`,
+    `Wins: ${wins} | Losses: ${losses}`,
+    `Estimated paper P/L: ${money(estimatedPnl)}`
   ];
 
   for (const trade of trades.slice(0, 12)) {
-    lines.push(`- ${trade.ticker} | ${trade.outcome || "closed"} | entry ${trade.entry_price} | exit ${trade.exit_price} | P/L ${trade.pnl_percent ?? 0}% | ${trade.close_reason || "review"}`);
+    const pnlDollars = ((trade.pnl_percent || 0) / 100) * notional;
+    lines.push(`- ${trade.ticker} | ${trade.outcome || "closed"} | ${trade.pnl_percent ?? 0}% | ${money(pnlDollars)} | ${trade.close_reason || "review"}`);
   }
 
   lines.push("", "Use Reports -> Paper Lifecycle / Performance for full details.");

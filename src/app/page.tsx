@@ -9,6 +9,7 @@ import { getActiveRadarTickers } from "@/lib/radar";
 import { getLatestScoredSignals } from "@/lib/scoring";
 import { getPerformanceSnapshot, performanceWindows } from "@/lib/performance";
 import { getAiUsageSnapshot } from "@/lib/aiUsage";
+import { getAiRouterSnapshot } from "@/lib/aiRouter";
 import { getCronStatusSnapshot } from "@/lib/cronStatus";
 import { getLatestSignalEvents, getSignalSourceHealth } from "@/lib/signalEvents";
 import { watchlist } from "@/lib/watchlist";
@@ -246,6 +247,14 @@ async function safeAiUsageSnapshot() {
   }
 }
 
+async function safeAiRouterSnapshot() {
+  try {
+    return await getAiRouterSnapshot();
+  } catch {
+    return null;
+  }
+}
+
 async function safeCronStatus() {
   try {
     return await getCronStatusSnapshot();
@@ -255,7 +264,7 @@ async function safeCronStatus() {
 }
 
 export default async function Home() {
-  const [paperAccount, paperPlan, paperExecution, paperLifecycle, tradingSafety, signals, signalEvents, sourceHealth, paperTrades, paperDecisions, pipelineRuns, radarTickers, performanceSnapshot, aiUsageSnapshot, cronStatus] = await Promise.all([
+  const [paperAccount, paperPlan, paperExecution, paperLifecycle, tradingSafety, signals, signalEvents, sourceHealth, paperTrades, paperDecisions, pipelineRuns, radarTickers, performanceSnapshot, aiUsageSnapshot, aiRouterSnapshot, cronStatus] = await Promise.all([
     safeAlpacaPaperAccount(),
     safePaperPlan(),
     safePaperExecution(),
@@ -270,6 +279,7 @@ export default async function Home() {
     safeRadarTickers(),
     safePerformanceSnapshot(),
     safeAiUsageSnapshot(),
+    safeAiRouterSnapshot(),
     safeCronStatus()
   ]);
 
@@ -288,6 +298,7 @@ export default async function Home() {
   const performanceRejects = performance?.rejects as { count: number; topReasons: Array<{ name: string; count: number }> } | undefined;
   const performanceOrders = performance?.orders as { submitted: number; filled: number; rejected: number; error: number } | undefined;
   const aiUsage = aiUsageSnapshot && aiUsageSnapshot.ok ? aiUsageSnapshot as any : null;
+  const aiRouter = aiRouterSnapshot && aiRouterSnapshot.ok ? aiRouterSnapshot as any : null;
   const engineStatus = cronStatus?.latestRun
     ? cronStatus.latestRun.ageMinutes <= 35
       ? "ON"
@@ -344,7 +355,7 @@ export default async function Home() {
           </div>
           <div className="top-actions">
             <a className="badge blue" href="/reports">Reports</a>
-            <a className="badge green" href="/api/run/pipeline">Run now</a>
+            <a className="badge green" href="/run?execute=1">Run now</a>
             <form action="/api/logout" method="post">
               <button className="ghost-button" type="submit">Lock</button>
             </form>
@@ -355,8 +366,8 @@ export default async function Home() {
         <section className="ai-usage-strip" id="ai-usage">
           <div className="ai-usage-main">
             <div>
-              <div className="eyebrow">Groq usage meter · last 24h</div>
-              <div className="ai-usage-title">{aiUsage ? `${aiUsage.calls.total} calls · ${aiUsage.tokens.total.toLocaleString()} tokens` : "No Groq usage logged yet"}</div>
+              <div className="eyebrow">AI usage · last 24h</div>
+              <div className="ai-usage-title">{aiUsage ? `${aiUsage.calls.total} real Groq call${aiUsage.calls.total === 1 ? "" : "s"} · ${aiUsage.tokens.total.toLocaleString()} tokens` : "No real Groq calls logged yet"}</div>
             </div>
             <div className="ai-usage-actions">
               <a className="badge blue" href="/api/ai/usage/report?window=1h">1h</a>
@@ -365,15 +376,16 @@ export default async function Home() {
               <a className="badge blue" href="/api/ai/usage?window=24h">JSON</a>
             </div>
           </div>
-          <div className="ai-usage-grid">
-            <div><span>Input</span><strong>{aiUsage ? aiUsage.tokens.input.toLocaleString() : "0"}</strong></div>
-            <div><span>Output</span><strong>{aiUsage ? aiUsage.tokens.output.toLocaleString() : "0"}</strong></div>
-            <div><span>Avg/call</span><strong>{aiUsage ? aiUsage.tokens.avgTotalPerCall.toLocaleString() : "0"}</strong></div>
+          <div className="ai-usage-grid ai-usage-grid-wide">
+            <div><span>Real Groq calls</span><strong>{aiUsage ? aiUsage.calls.total.toLocaleString() : "0"}</strong></div>
+            <div><span>AI candidates routed</span><strong>{aiRouter ? aiRouter.wouldRoute.toLocaleString() : "0"}</strong></div>
+            <div><span>Skipped before Groq</span><strong>{aiRouter ? aiRouter.skippedBeforeGroq.toLocaleString() : "0"}</strong></div>
+            <div><span>Tokens</span><strong>{aiUsage ? aiUsage.tokens.total.toLocaleString() : "0"}</strong></div>
             <div><span>Failed</span><strong className={aiUsage?.calls.failed ? "text-red" : "text-green"}>{aiUsage ? aiUsage.calls.failed : 0}</strong></div>
             <div><span>Est. cost</span><strong>{aiUsage ? aiUsage.cost.display : "$0.0000"}</strong></div>
           </div>
           <div className="usage-meter"><span style={{ width: `${aiUsage ? Math.min(100, Math.max(4, aiUsage.calls.total * 12)) : 4}%` }} /></div>
-          <div className="ai-usage-note">Last 24h activity meter only. Raven does not enforce Groq limits in this phase.</div>
+          <div className="ai-usage-note">Manual runs do not equal Groq calls. Most Raven steps use SEC, Alpaca, database, and paper-trade logic. Groq only increments when the classifier actually calls the model.</div>
         </section>
 
         <section className="panel cron-panel" id="cron">

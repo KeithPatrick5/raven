@@ -196,6 +196,59 @@ export async function routeBestCandidatesToAi(limit = 1) {
   };
 }
 
+export async function getAiRouterSnapshot() {
+  if (!hasDatabase()) {
+    return {
+      ok: false,
+      phase: "AI_BUDGET_ROUTER_SNAPSHOT",
+      database: "not_configured" as const,
+      pendingWatchlistFilings: 0,
+      reviewed: 0,
+      eligible: 0,
+      wouldRoute: 0,
+      skippedBeforeGroq: 0,
+      reason: "database_not_configured",
+      routedCandidates: [],
+      errors: [{ error: "DATABASE_URL or STORAGE_URL is not configured." }]
+    };
+  }
+
+  await ensureRavenTables();
+  const sql = db();
+  const pendingWatchlistFilings = await getPendingWatchlistCount(sql);
+  const candidates = pendingWatchlistFilings > 0 ? [] : await getRoutableCandidates(sql);
+  const eligibleCandidates = candidates.filter(shouldRoute);
+  const routedCandidates = eligibleCandidates.slice(0, 5).map((candidate) => ({
+    ticker: candidate.ticker,
+    form: candidate.form,
+    accessionNumber: candidate.accession_number,
+    tier: candidate.tier,
+    eventQualityScore: candidate.event_quality_score,
+    marketAnomalyScore: candidate.anomaly_score,
+    reason: candidate.ranking_reason
+  }));
+  const reason = pendingWatchlistFilings > 0
+    ? "watchlist_sec_pending_first"
+    : routedCandidates.length > 0
+      ? "would_route_ranked_discovery_candidate"
+      : "no_ranked_trade_candidate_survived_routing";
+
+  return {
+    ok: true,
+    phase: "AI_BUDGET_ROUTER_SNAPSHOT",
+    database: "configured" as const,
+    generatedAt: new Date().toISOString(),
+    pendingWatchlistFilings,
+    reviewed: candidates.length,
+    eligible: eligibleCandidates.length,
+    wouldRoute: Math.min(1, eligibleCandidates.length),
+    skippedBeforeGroq: Math.max(0, candidates.length - eligibleCandidates.length),
+    reason,
+    routedCandidates,
+    errors: []
+  };
+}
+
 export async function getAiRouterReport() {
   if (!hasDatabase()) {
     return [

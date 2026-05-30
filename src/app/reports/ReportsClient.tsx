@@ -145,7 +145,7 @@ export default function ReportsClient({ truth }: { truth: TruthSummary }) {
       title: "Quick reports",
       meta: "The reports you will actually use most often. Click once, then choose readable or raw.",
       buttons: [
-        directButton("Run Raven now", "/api/run/report?run=1", "manual run + text report", "green"),
+        directButton("Run Raven now", "/run?execute=1", "readable run + raw JSON", "green"),
         reportButton("Latest performance", "performance", "/api/performance/report?window=24h", "/api/performance?window=24h", "24h", "operator health", "blue"),
         reportButton("Cron health", "cron", "/api/cron/status/report", "/api/cron/status", undefined, "schedule + last run", "blue"),
         reportButton("Signal Truth 7d", "signal-truth", "/api/signals/truth/report?window=7d&sync=1", "/api/signals/truth?window=7d&sync=1", "7d", "prove the edge", "green"),
@@ -245,7 +245,7 @@ export default function ReportsClient({ truth }: { truth: TruthSummary }) {
           </div>
           <div className="top-actions">
             <Link className="badge blue" href="/">Dashboard</Link>
-            <a className="badge green" href="/api/run/report?run=1">Run now</a>
+            <a className="badge green" href="/run?execute=1">Run now</a>
           </div>
         </div>
 

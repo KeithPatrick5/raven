@@ -83,7 +83,7 @@ export type PaperTradePlan = {
   };
 };
 
-const DEFAULT_MAX_NOTIONAL = 250;
+const DEFAULT_MAX_NOTIONAL = 1000;
 const DEFAULT_POSITION_PCT = 1;
 const DEFAULT_MAX_OPEN_POSITIONS = 10;
 const DEFAULT_MAX_DAILY_TRADES = 10;
