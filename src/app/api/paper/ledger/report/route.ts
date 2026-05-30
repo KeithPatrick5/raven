@@ -49,7 +49,10 @@ export async function GET() {
 
     if (ledger.errors.length) {
       lines.push("", "WARNINGS", "--------");
-      for (const error of ledger.errors) lines.push(`${error.ticker || "UNKNOWN"}: ${error.error}`);
+      for (const error of ledger.errors) {
+        const ticker = "ticker" in error && error.ticker ? error.ticker : "UNKNOWN";
+        lines.push(`${ticker}: ${error.error}`);
+      }
     }
 
     return new NextResponse(lines.join("\n"), { headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" } });
