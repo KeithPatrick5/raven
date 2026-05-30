@@ -14,6 +14,16 @@ function signedMoney(value: number | null | undefined) {
   return `${value > 0 ? "+" : ""}${money(value)}`;
 }
 
+function pct(value: number | null | undefined) {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "--";
+  return `${value > 0 ? "+" : ""}${value.toFixed(2)}%`;
+}
+
+function errorLabel(error: { ticker?: string; error: string }) {
+  const ticker = "ticker" in error && error.ticker ? error.ticker : "UNKNOWN";
+  return `${ticker}: ${error.error}`;
+}
+
 export async function GET() {
   try {
     const ledger = await getPaperLedgerSnapshot();
@@ -26,33 +36,62 @@ export async function GET() {
       "-------",
       `Starting balance: ${money(ledger.startingBalance)}`,
       `Current sim equity: ${money(ledger.currentEquity)}`,
-      `Cash after open exposure: ${money(ledger.cash)}`,
-      `Open exposure: ${money(ledger.openExposure)}`,
+      `Cash after active open exposure: ${money(ledger.cash)}`,
+      `Active open exposure: ${money(ledger.openExposure)}`,
       `Realized P/L: ${signedMoney(ledger.realizedPnl)}`,
-      `Unrealized P/L: ${signedMoney(ledger.unrealizedPnl)}`,
+      `Pending-close P/L: ${signedMoney(ledger.pendingExitPnl)}`,
+      `Unrealized active-open P/L: ${signedMoney(ledger.unrealizedPnl)}`,
       "",
-      "TRADES",
-      "------",
-      `Open trades: ${ledger.openTrades}`,
+      "TRADE COUNTS",
+      "------------",
+      `Active open trades: ${ledger.openTrades}`,
+      `Pending close/sync trades: ${ledger.pendingExitTrades}`,
       `Closed trades: ${ledger.closedTrades}`,
       `Wins: ${ledger.wins}`,
       `Losses: ${ledger.losses}`,
-      `Win rate: ${ledger.winRate === null ? "--" : `${ledger.winRate}%`}`
+      `Win rate: ${ledger.winRate === null ? "--" : `${ledger.winRate}%`}`,
+      "",
+      "BROKER SYNC NOTE",
+      "----------------",
+      ledger.brokerSync.note
     ];
 
-    if (ledger.trades.length) {
-      lines.push("", "OPEN SIM POSITIONS", "------------------");
-      for (const trade of ledger.trades) {
-        lines.push(`${trade.ticker} | ${trade.side.toUpperCase()} | ${money(trade.notional)} notional | entry ${trade.entryPrice} | latest ${trade.currentPrice ?? "--"} | P/L ${signedMoney(trade.unrealizedPnl)}`);
+    if (ledger.openPositions.length) {
+      lines.push("", "ACTIVE OPEN SIM POSITIONS", "-------------------------");
+      for (const trade of ledger.openPositions.slice(0, 12)) {
+        const legacy = trade.legacyDuplicate ? ` | legacy duplicate group ${trade.duplicateCount}x` : "";
+        lines.push(`${trade.ticker} | ${trade.side.toUpperCase()} | ${money(trade.notional)} notional | entry ${trade.entryPrice} | latest ${trade.currentPrice ?? "--"} | P/L ${signedMoney(trade.pnl)} (${pct(trade.pnlPercent)})${legacy}`);
+      }
+    } else {
+      lines.push("", "ACTIVE OPEN SIM POSITIONS", "-------------------------", "None");
+    }
+
+    if (ledger.pendingExitPositions.length) {
+      lines.push("", "PENDING CLOSE / SYNC", "--------------------");
+      for (const trade of ledger.pendingExitPositions.slice(0, 12)) {
+        const legacy = trade.legacyDuplicate ? ` | legacy duplicate group ${trade.duplicateCount}x` : "";
+        lines.push(`${trade.ticker} | ${trade.wouldOutcome.toUpperCase()} | ${trade.exitReason} | ${money(trade.notional)} notional | entry ${trade.entryPrice} | latest ${trade.currentPrice ?? "--"} | P/L ${signedMoney(trade.pnl)} (${pct(trade.pnlPercent)})${legacy}`);
       }
     }
 
-    if (ledger.errors.length) {
-      lines.push("", "WARNINGS", "--------");
-      for (const error of ledger.errors) {
-        const ticker = "ticker" in error && error.ticker ? error.ticker : "UNKNOWN";
-        lines.push(`${ticker}: ${error.error}`);
+    if (ledger.closedPositions.length) {
+      lines.push("", "RECENT CLOSED SIM TRADES", "------------------------");
+      for (const trade of ledger.closedPositions.slice(0, 12)) {
+        lines.push(`${trade.ticker} | ${(trade.outcome || "closed").toUpperCase()} | ${money(trade.notional)} notional | entry ${trade.entryPrice} | exit ${trade.exitPrice ?? "--"} | P/L ${signedMoney(trade.pnl)} (${pct(trade.pnlPercent)}) | ${trade.closeReason || "closed"}`);
       }
+    }
+
+    if (ledger.duplicateTickers.length) {
+      lines.push("", "LEGACY DUPLICATE TEST ROWS", "--------------------------");
+      for (const row of ledger.duplicateTickers) {
+        lines.push(`${row.ticker}: ${row.openCount} active open rows. Future runs are deduped; these remain historical test noise unless manually cleaned.`);
+      }
+    }
+
+    const allWarnings = [...ledger.warnings, ...ledger.errors];
+    if (allWarnings.length) {
+      lines.push("", "WARNINGS", "--------");
+      for (const error of allWarnings) lines.push(errorLabel(error));
     }
 
     return new NextResponse(lines.join("\n"), { headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" } });

@@ -307,6 +307,14 @@ export default async function Home() {
   const performanceShadows = performance?.shadows as { count: number; avgPnlPercent: number; best?: { ticker: string; pnlPercent: number; finalScore: number } | null; worst?: { ticker: string; pnlPercent: number; finalScore: number } | null; items?: Array<{ ticker: string; pnlPercent: number; finalScore: number; action: string }> } | undefined;
   const performanceRejects = performance?.rejects as { count: number; topReasons: Array<{ name: string; count: number }> } | undefined;
   const performanceOrders = performance?.orders as { submitted: number; filled: number; rejected: number; error: number } | undefined;
+  const lifecycleStatusCounts = (paperLifecycle?.lifecycle || []).reduce((counts, row) => {
+    const key = String(row.status || "unknown");
+    counts[key] = (counts[key] || 0) + 1;
+    return counts;
+  }, {} as Record<string, number>);
+  const brokerPendingOrders = (paperLifecycle?.orders || []).filter((order) => ["accepted", "new", "pending_new", "partially_filled", "held"].includes(String(order.status || "").toLowerCase())).length;
+  const brokerFilledPositions = paperLifecycle?.positions.length || 0;
+  const brokerFailedRows = (lifecycleStatusCounts.failed || 0) + (lifecycleStatusCounts.rejected || 0);
   const aiUsage = aiUsageSnapshot && aiUsageSnapshot.ok ? aiUsageSnapshot as any : null;
   const aiRouter = aiRouterSnapshot && aiRouterSnapshot.ok ? aiRouterSnapshot as any : null;
   const engineStatus = cronStatus?.latestRun
@@ -449,7 +457,7 @@ export default async function Home() {
           <div className="kpi">
             <div className="kpi-label">Open trades</div>
             <div className="kpi-value">{paperLedger ? paperLedger.openTrades : openTrades.length}</div>
-            <div className="kpi-note">exposure {paperLedger ? money(paperLedger.openExposure) : "--"} · exits {paperLifecycle?.pendingExits || 0}</div>
+            <div className="kpi-note">exposure {paperLedger ? money(paperLedger.openExposure) : "--"} · pending close {paperLedger?.pendingExitTrades || 0}</div>
           </div>
           <div className="kpi">
             <div className="kpi-label">Latest decision</div>
@@ -528,30 +536,70 @@ export default async function Home() {
                   <div className="run-summary run-summary-tight">
                     <div><span>Starting balance</span><strong>{money(paperLedger.startingBalance)}</strong></div>
                     <div><span>Current equity</span><strong className={paperLedger.currentEquity >= paperLedger.startingBalance ? "text-green" : "text-red"}>{money(paperLedger.currentEquity)}</strong></div>
-                    <div><span>Cash after exposure</span><strong>{money(paperLedger.cash)}</strong></div>
-                    <div><span>Open exposure</span><strong>{money(paperLedger.openExposure)}</strong></div>
+                    <div><span>Cash after active exposure</span><strong>{money(paperLedger.cash)}</strong></div>
+                    <div><span>Active exposure</span><strong>{money(paperLedger.openExposure)}</strong></div>
                     <div><span>Realized P/L</span><strong className={paperLedger.realizedPnl >= 0 ? "text-green" : "text-red"}>{signedMoney(paperLedger.realizedPnl)}</strong></div>
-                    <div><span>Unrealized P/L</span><strong className={paperLedger.unrealizedPnl >= 0 ? "text-green" : "text-red"}>{signedMoney(paperLedger.unrealizedPnl)}</strong></div>
+                    <div><span>Pending-close P/L</span><strong className={paperLedger.pendingExitPnl >= 0 ? "text-green" : "text-red"}>{signedMoney(paperLedger.pendingExitPnl)}</strong></div>
+                    <div><span>Unrealized active P/L</span><strong className={paperLedger.unrealizedPnl >= 0 ? "text-green" : "text-red"}>{signedMoney(paperLedger.unrealizedPnl)}</strong></div>
+                    <div><span>Active open trades</span><strong>{paperLedger.openTrades}</strong></div>
+                    <div><span>Pending close/sync</span><strong className={paperLedger.pendingExitTrades > 0 ? "text-amber" : "text-green"}>{paperLedger.pendingExitTrades}</strong></div>
                     <div><span>Closed trades</span><strong>{paperLedger.closedTrades}</strong></div>
                     <div><span>Win rate</span><strong>{paperLedger.winRate === null ? "--" : `${paperLedger.winRate}%`}</strong></div>
                   </div>
-                  {paperLedger.trades.length > 0 ? (
+                  {paperLedger.openPositions.length > 0 ? (
                     <div className="signal-list">
-                      {paperLedger.trades.slice(0, 6).map((trade) => (
-                        <article className="signal-card" key={`${trade.ticker}-${trade.entryPrice}-${trade.notional}`}>
+                      {paperLedger.openPositions.slice(0, 6).map((trade) => (
+                        <article className="signal-card" key={`${trade.id}-${trade.ticker}-${trade.entryPrice}`}>
                           <div className="signal-head">
                             <div>
-                              <div className="signal-title">{trade.ticker} · {trade.side}</div>
-                              <div className="panel-meta">{money(trade.notional)} notional · entry {trade.entryPrice} · latest {trade.currentPrice ?? "--"}</div>
+                              <div className="signal-title">{trade.ticker} · active sim {trade.side}</div>
+                              <div className="panel-meta">{money(trade.notional)} notional · entry {trade.entryPrice} · latest {trade.currentPrice ?? "--"}{trade.legacyDuplicate ? ` · legacy duplicate ${trade.duplicateCount}x` : ""}</div>
                             </div>
-                            <div className={`score ${trade.unrealizedPnl >= 0 ? "green" : "red"}`}>{signedMoney(trade.unrealizedPnl)}</div>
+                            <div className={`score ${trade.pnl >= 0 ? "green" : "red"}`}>{signedMoney(trade.pnl)}</div>
                           </div>
                         </article>
                       ))}
                     </div>
                   ) : (
-                    <div className="empty-state">No open Raven sim trades.</div>
+                    <div className="empty-state">No active Raven sim trades.</div>
                   )}
+                  {paperLedger.pendingExitPositions.length > 0 ? (
+                    <>
+                      <div className="panel-meta" style={{ padding: "8px 13px 0" }}>Exit-hit sim trades waiting for review/sync</div>
+                      <div className="signal-list">
+                        {paperLedger.pendingExitPositions.slice(0, 4).map((trade) => (
+                          <article className="signal-card" key={`pending-${trade.id}`}>
+                            <div className="signal-head">
+                              <div>
+                                <div className="signal-title">{trade.ticker} · pending close · {cleanLabel(trade.exitReason)}</div>
+                                <div className="panel-meta">{money(trade.notional)} notional · entry {trade.entryPrice} · latest {trade.currentPrice ?? "--"}{trade.legacyDuplicate ? ` · legacy duplicate ${trade.duplicateCount}x` : ""}</div>
+                              </div>
+                              <div className={`score ${trade.pnl >= 0 ? "green" : "red"}`}>{signedMoney(trade.pnl)}</div>
+                            </div>
+                          </article>
+                        ))}
+                      </div>
+                    </>
+                  ) : null}
+                  {paperLedger.closedPositions.length > 0 ? (
+                    <>
+                      <div className="panel-meta" style={{ padding: "8px 13px 0" }}>Recent closed sim trades</div>
+                      <div className="signal-list">
+                        {paperLedger.closedPositions.slice(0, 4).map((trade) => (
+                          <article className="signal-card" key={`closed-${trade.id}`}>
+                            <div className="signal-head">
+                              <div>
+                                <div className="signal-title">{trade.ticker} · {trade.outcome || "closed"}</div>
+                                <div className="panel-meta">{money(trade.notional)} notional · entry {trade.entryPrice} · exit {trade.exitPrice ?? "--"}</div>
+                              </div>
+                              <div className={`score ${trade.pnl >= 0 ? "green" : "red"}`}>{signedMoney(trade.pnl)}</div>
+                            </div>
+                          </article>
+                        ))}
+                      </div>
+                    </>
+                  ) : null}
+                  {paperLedger.warnings.length > 0 ? <div className="empty-state amber">{paperLedger.warnings[0].error}</div> : null}
                   <div className="market-strip" style={{ padding: "0 13px 12px" }}>
                     <a className="badge blue" href="/api/paper/ledger/report">Ledger report</a>
                     <a className="badge blue" href="/api/paper/ledger">Ledger JSON</a>
@@ -577,11 +625,13 @@ export default async function Home() {
                     <div><span>Cash</span><strong>{money(paperAccount.summary.cash)}</strong></div>
                     <div><span>Buying power</span><strong>{money(paperAccount.summary.buyingPower)}</strong></div>
                     <div><span>Portfolio</span><strong>{money(paperAccount.summary.portfolioValue)}</strong></div>
-                    <div><span>Open positions</span><strong>{paperAccount.summary.openPositionCount}</strong></div>
-                    <div><span>Open orders</span><strong>{paperAccount.summary.openOrderCount}</strong></div>
+                    <div><span>Filled positions</span><strong>{brokerFilledPositions}</strong></div>
+                    <div><span>Pending orders</span><strong className={brokerPendingOrders > 0 ? "text-amber" : "text-green"}>{brokerPendingOrders}</strong></div>
+                    <div><span>Failed/rejected rows</span><strong className={brokerFailedRows > 0 ? "text-red" : "text-green"}>{brokerFailedRows}</strong></div>
                     <div><span>Unrealized P/L</span><strong className={paperAccount.summary.unrealizedPl && paperAccount.summary.unrealizedPl < 0 ? "text-red" : "text-green"}>{signedMoney(paperAccount.summary.unrealizedPl)}</strong></div>
                     <div><span>Live trading</span><strong className="text-red">disabled</strong></div>
                   </div>
+                  {brokerPendingOrders > 0 && brokerFilledPositions === 0 ? <div className="empty-state amber">Alpaca has accepted/pending paper orders but no filled positions yet. Broker equity and cash will not move until orders fill.</div> : null}
                   {paperAccount.positions.length > 0 ? (
                     <div className="signal-list">
                       {paperAccount.positions.slice(0, 6).map((position) => (
@@ -761,11 +811,12 @@ export default async function Home() {
               {paperLifecycle ? (
                 <>
                   <div className="run-summary run-summary-tight">
-                    <div><span>Open positions</span><strong>{paperLifecycle.openPositions}</strong></div>
-                    <div><span>Open orders</span><strong>{paperLifecycle.openOrders}</strong></div>
+                    <div><span>Alpaca filled positions</span><strong>{paperLifecycle.openPositions}</strong></div>
+                    <div><span>Alpaca open orders</span><strong>{paperLifecycle.openOrders}</strong></div>
                     <div><span>Submissions</span><strong>{paperLifecycle.syncedSubmissions}</strong></div>
                     <div><span>Pending entries</span><strong>{paperLifecycle.pendingEntries}</strong></div>
                     <div><span>Pending exits</span><strong className={paperLifecycle.pendingExits > 0 ? "text-amber" : "text-green"}>{paperLifecycle.pendingExits}</strong></div>
+                    <div><span>Failed/rejected/expired</span><strong className={brokerFailedRows > 0 ? "text-red" : "text-green"}>{brokerFailedRows}</strong></div>
                     <div><span>Closed/cancelled</span><strong>{paperLifecycle.closed}</strong></div>
                   </div>
                   {paperLifecycle.lifecycle.length > 0 ? (
