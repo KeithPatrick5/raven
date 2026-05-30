@@ -2,6 +2,7 @@ import { db, ensureRavenTables, hasDatabase } from "@/lib/db";
 import { submitAlpacaPaperMarketOrder } from "@/lib/alpacaTrading";
 import { getPaperTradePlan, type PaperTradePlan } from "@/lib/paperPlanner";
 import { getTradingSafetyStatus, isPaperExecutionAllowedBySafety } from "@/lib/tradingSafety";
+import { getRavenMarketStatus, type RavenMarketStatus } from "@/lib/marketStatus";
 
 type ExecutionMode = "preview_only" | "execution_disabled" | "paper_execution_enabled";
 
@@ -27,6 +28,7 @@ type PaperExecutionResult = {
   submittedOrder: unknown | null;
   duplicate: boolean;
   messages: string[];
+  marketStatus?: RavenMarketStatus;
   errors: Array<{ error: string }>;
 };
 
@@ -113,6 +115,7 @@ export async function runPaperOrderExecution(options: { submit: boolean }): Prom
   const enabled = paperTradingEnabled();
   const messages: string[] = [];
   const safety = getTradingSafetyStatus();
+  const marketStatus = getRavenMarketStatus();
 
   if (safety.warnings.length) {
     messages.push(...safety.warnings);
@@ -135,6 +138,7 @@ export async function runPaperOrderExecution(options: { submit: boolean }): Prom
       submittedOrder: null,
       duplicate: false,
       messages: ["Blocked because live mode/switch is active. Paper execution cannot run while live mode is requested.", ...safety.blocks],
+      marketStatus,
       errors: [{ error: "Live trading must remain disabled for paper execution." }]
     };
   }
@@ -156,6 +160,7 @@ export async function runPaperOrderExecution(options: { submit: boolean }): Prom
       submittedOrder: null,
       duplicate: false,
       messages: [],
+      marketStatus,
       errors: [{ error: "DATABASE_URL or STORAGE_URL is not configured." }]
     };
   }
@@ -174,6 +179,7 @@ export async function runPaperOrderExecution(options: { submit: boolean }): Prom
   }
 
   if (!options.submit) {
+    messages.push(marketStatus.note);
     return {
       ok: planResult.ok,
       phase: "PAPER_ORDER_EXECUTION_SWITCH",
@@ -190,6 +196,7 @@ export async function runPaperOrderExecution(options: { submit: boolean }): Prom
       submittedOrder: null,
       duplicate: false,
       messages,
+      marketStatus,
       errors: planResult.errors
     };
   }
@@ -213,6 +220,7 @@ export async function runPaperOrderExecution(options: { submit: boolean }): Prom
       submittedOrder: null,
       duplicate: false,
       messages,
+      marketStatus,
       errors: planResult.errors
     };
   }
@@ -234,6 +242,7 @@ export async function runPaperOrderExecution(options: { submit: boolean }): Prom
       submittedOrder: null,
       duplicate: false,
       messages,
+      marketStatus,
       errors: planResult.errors
     };
   }
@@ -255,6 +264,30 @@ export async function runPaperOrderExecution(options: { submit: boolean }): Prom
       submittedOrder: null,
       duplicate: false,
       messages,
+      marketStatus,
+      errors: planResult.errors
+    };
+  }
+
+  if (!marketStatus.brokerOrdersAllowedNow) {
+    messages.push(`Regular market is ${marketStatus.status}. Alpaca paper order submission is blocked until ${marketStatus.nextOpenLabel}. Raven sim trades can still run.`);
+    return {
+      ok: planResult.ok,
+      phase: "PAPER_ORDER_EXECUTION_SWITCH",
+      mode: "paper_execution_enabled",
+      startedAt,
+      finishedAt: new Date().toISOString(),
+      liveTrading: "disabled",
+      paperTradingEnabled: true,
+      orderSubmission: "blocked",
+      account: planResult.account,
+      candidatesReviewed: planResult.candidatesReviewed,
+      eligible: planResult.eligible,
+      selectedPlan,
+      submittedOrder: null,
+      duplicate: false,
+      messages,
+      marketStatus,
       errors: planResult.errors
     };
   }
@@ -278,6 +311,7 @@ export async function runPaperOrderExecution(options: { submit: boolean }): Prom
       submittedOrder: duplicate,
       duplicate: true,
       messages,
+      marketStatus,
       errors: []
     };
   }
@@ -310,6 +344,7 @@ export async function runPaperOrderExecution(options: { submit: boolean }): Prom
       submittedOrder: order,
       duplicate: false,
       messages,
+      marketStatus,
       errors: []
     };
   } catch (error) {
@@ -331,6 +366,7 @@ export async function runPaperOrderExecution(options: { submit: boolean }): Prom
       submittedOrder: null,
       duplicate: false,
       messages,
+      marketStatus,
       errors: [{ error: message }]
     };
   }
@@ -357,6 +393,11 @@ export async function getPaperExecutionTextReport() {
   lines.push("Live trading: disabled");
   lines.push(`Paper execution enabled: ${result.paperTradingEnabled ? "yes" : "no"}`);
   lines.push(`Order submission: ${result.orderSubmission}`);
+  if (result.marketStatus) {
+    lines.push(`Market: ${result.marketStatus.status} (${result.marketStatus.nowEt})`);
+    lines.push(`Broker order policy: ${result.marketStatus.brokerOrderPolicy}`);
+    if (!result.marketStatus.brokerOrdersAllowedNow) lines.push(`Broker orders blocked until: ${result.marketStatus.nextOpenLabel}`);
+  }
   lines.push("");
   lines.push("ACCOUNT");
   lines.push("-------");

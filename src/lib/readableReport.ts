@@ -30,6 +30,16 @@ function num(value: unknown): number {
   return 0;
 }
 
+function money(value: unknown) {
+  const n = num(value);
+  return `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function signedMoney(value: unknown) {
+  const n = num(value);
+  return `${n > 0 ? "+" : ""}${money(n)}`;
+}
+
 function seconds(ms: unknown) {
   const value = num(ms);
   if (!value) return "0.0s";
@@ -104,6 +114,11 @@ function sourceStepLine(run: PipelineLike, name: string, label: string) {
   if (name === "paper_position_lifecycle") {
     const status = found.ok && data.ok !== false ? "ok" : "needs attention";
     return `${label}: ${status} | ${seconds(found.durationMs)} | open positions ${num(data.openPositions)} | open orders ${num(data.openOrders)} | pending exits ${num(data.pendingExits)}`;
+  }
+
+  if (name === "paper_trade_book_stabilizer") {
+    const status = found.ok && data.ok !== false ? "ok" : "needs attention";
+    return `${label}: ${status} | ${seconds(found.durationMs)} | reviewed ${num(data.reviewed)} | auto closed ${num(data.autoClosed)} | duplicates archived ${num(data.duplicatesArchived)}`;
   }
 
   if (name === "sec_discovery_ai_fallback") {
@@ -242,6 +257,7 @@ export function buildPipelineTextReport(run: PipelineLike) {
   const paper = result(run, "paper_trade_engine");
   const review = result(run, "paper_trade_review");
   const paperExec = result(run, "paper_order_execution");
+  const stabilizer = result(run, "paper_trade_book_stabilizer");
   const lifecycle = result(run, "paper_position_lifecycle");
   const fallback = result(run, "ai_budget_router");
   const paperRejects = asArray(paper.rejects);
@@ -289,6 +305,16 @@ export function buildPipelineTextReport(run: PipelineLike) {
     line("Paper trades closed", num(review.closed)),
     line("Autonomous paper execution", `${paperExec.paperTradingEnabled ? "enabled" : "disabled"}, ${paperExec.orderSubmission || "not run"}`),
     line("Lifecycle", `${num(lifecycle.openPositions)} open positions, ${num(lifecycle.openOrders)} open orders, ${num(lifecycle.pendingExits)} pending exits`),
+    line("Stabilizer", `${num(stabilizer.autoClosed)} auto closed, ${num(stabilizer.duplicatesArchived)} legacy duplicates archived`),
+    "",
+    "MONEY / ORDER READ",
+    "------------------",
+    line("Internal sim trades opened", num(paper.opened)),
+    line("Alpaca broker order submission", paperExec.orderSubmission || "not run"),
+    line("Eligible broker plans", `${num(paperExec.eligible)}/${num(paperExec.candidatesReviewed)}`),
+    line("Selected broker notional", asObject(paperExec.selectedPlan).suggestedNotional ? money(asObject(paperExec.selectedPlan).suggestedNotional) : "none"),
+    line("Broker account equity", asObject(paperExec.account).equity ? money(asObject(paperExec.account).equity) : "--"),
+    asObject(paperExec.marketStatus).status ? line("Market status", `${asObject(paperExec.marketStatus).status} | ${asObject(paperExec.marketStatus).note || ""}`) : "Market status: not reported",
     "",
     "SOURCE HEALTH",
     "-------------",
@@ -302,6 +328,7 @@ export function buildPipelineTextReport(run: PipelineLike) {
     sourceStepLine(run, "candidate_ranking", "Candidate Ranking"),
     sourceStepLine(run, "ai_budget_router", "AI Budget Router"),
     sourceStepLine(run, "radar_sync", "Radar"),
+    sourceStepLine(run, "paper_trade_book_stabilizer", "Paper Trade Stabilizer"),
     sourceStepLine(run, "paper_order_execution", "Paper Execution"),
     sourceStepLine(run, "shadow_trade_sync", "Shadow Trades"),
     sourceStepLine(run, "paper_position_lifecycle", "Lifecycle"),
@@ -312,7 +339,8 @@ export function buildPipelineTextReport(run: PipelineLike) {
     "",
     "TRADE DECISION",
     "--------------",
-    paperExec.orderSubmission === "submitted" ? "Autonomous Alpaca paper order submitted." : paperTrades.length ? `${paperTrades.length} paper trade(s) opened.` : "No paper trades opened.",
+    paperExec.orderSubmission === "submitted" ? "Autonomous Alpaca paper order submitted." : paperTrades.length ? `${paperTrades.length} internal paper trade(s) opened.` : "No internal paper trades opened.",
+    num(stabilizer.autoClosed) || num(stabilizer.duplicatesArchived) ? `Cleanup: ${num(stabilizer.autoClosed)} auto-closed, ${num(stabilizer.duplicatesArchived)} legacy duplicate(s) archived.` : "Cleanup: no pending stop/target or duplicate cleanup needed.",
     paperRejects.length ? `Rejected ${paperRejects.length} candidate(s).` : "No new rejects.",
     ...paperRejects.slice(0, 5).map((item) => {
       const reject = asObject(item);

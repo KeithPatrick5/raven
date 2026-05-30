@@ -622,6 +622,140 @@ function closeDecision(trade: OpenTradeRow, latestClose: number | null) {
   return { shouldClose: false, reason: "still_open", outcome: "open" };
 }
 
+
+export async function stabilizePaperTradeBook(limit = 200) {
+  if (!hasDatabase()) {
+    return {
+      ok: false,
+      database: "not_configured" as const,
+      reviewed: 0,
+      autoClosed: 0,
+      duplicatesArchived: 0,
+      keptDuplicateLeaders: 0,
+      messages: [],
+      errors: [{ error: "DATABASE_URL or STORAGE_URL is not configured." }]
+    };
+  }
+
+  await ensureRavenTables();
+  const sql = db();
+  const messages: string[] = [];
+  const errors: Array<{ ticker?: string; error: string }> = [];
+  const closedRows: PaperTrade[] = [];
+  const openTrades = await getOpenTrades(limit);
+
+  for (const trade of openTrades) {
+    try {
+      const snapshot = await getLatestAlpacaSnapshot(trade.ticker);
+      const verdict = closeDecision(trade, snapshot.latestClose);
+      if (verdict.shouldClose && snapshot.latestClose !== null) {
+        const closed = await closeTrade(trade, snapshot.latestClose, verdict.reason, verdict.outcome);
+        if (closed) closedRows.push(closed);
+      }
+    } catch (error) {
+      errors.push({ ticker: trade.ticker, error: error instanceof Error ? error.message : "Unknown paper trade stabilize close failure" });
+    }
+  }
+
+  const remainingOpen = await getOpenTrades(limit);
+  const groups = remainingOpen.reduce((map, trade) => {
+    const ticker = trade.ticker.toUpperCase();
+    const list = map.get(ticker) || [];
+    list.push(trade);
+    map.set(ticker, list);
+    return map;
+  }, new Map<string, OpenTradeRow[]>());
+
+  const archivedRows: PaperTrade[] = [];
+  let keptDuplicateLeaders = 0;
+  for (const [ticker, trades] of groups.entries()) {
+    if (trades.length <= 1) continue;
+    keptDuplicateLeaders += 1;
+    const sorted = [...trades].sort((a, b) => {
+      if (b.final_score !== a.final_score) return b.final_score - a.final_score;
+      return new Date(a.opened_at).getTime() - new Date(b.opened_at).getTime();
+    });
+    const [keeper, ...duplicates] = sorted;
+    messages.push(`Kept ${keeper.ticker} trade #${keeper.id} and archived ${duplicates.length} legacy duplicate row(s).`);
+    for (const duplicate of duplicates) {
+      try {
+        const updated = await sql<PaperTrade[]>`
+          update paper_trades
+          set
+            status = 'closed',
+            exit_price = ${duplicate.entry_price},
+            closed_at = now(),
+            close_reason = 'legacy_duplicate_cleanup',
+            outcome = 'archived',
+            pnl_percent = 0
+          where id = ${duplicate.id}
+            and status = 'open'
+          returning
+            id,
+            scored_signal_id,
+            ticker,
+            accession_number,
+            side,
+            status,
+            entry_price,
+            stop_price,
+            target_price,
+            exit_price,
+            final_score,
+            decision_reason,
+            opened_at::text as opened_at,
+            closed_at::text as closed_at,
+            close_reason,
+            outcome,
+            pnl_percent,
+            notional
+        `;
+        if (updated[0]) archivedRows.push(updated[0]);
+      } catch (error) {
+        errors.push({ ticker, error: error instanceof Error ? error.message : "Unknown duplicate archive failure" });
+      }
+    }
+  }
+
+  const telegram = await sendCloseBatchAlertIfConfigured(closedRows.map((trade) => ({
+    ticker: trade.ticker,
+    side: trade.side,
+    entry_price: asNumber(trade.entry_price),
+    stop_price: null,
+    target_price: null,
+    final_score: trade.final_score || 0,
+    decision_reason: "Internal paper trade auto-closed by stabilizer.",
+    outcome: trade.outcome || null,
+    pnl_percent: asNumber(trade.pnl_percent),
+    exit_price: asNumber(trade.exit_price),
+    close_reason: trade.close_reason || null
+  })));
+
+  return {
+    ok: errors.length === 0,
+    database: "configured" as const,
+    reviewed: openTrades.length,
+    autoClosed: closedRows.length,
+    duplicatesArchived: archivedRows.length,
+    keptDuplicateLeaders,
+    messages,
+    telegram,
+    autoClosedTrades: closedRows.map((trade) => ({
+      ticker: trade.ticker,
+      outcome: trade.outcome,
+      closeReason: trade.close_reason,
+      pnlPercent: trade.pnl_percent,
+      exitPrice: trade.exit_price
+    })),
+    archivedDuplicates: archivedRows.map((trade) => ({
+      ticker: trade.ticker,
+      id: trade.id,
+      closeReason: trade.close_reason
+    })),
+    errors
+  };
+}
+
 export async function reviewOpenPaperTrades(limit = 10) {
   if (!hasDatabase()) {
     return {

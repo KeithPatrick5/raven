@@ -106,7 +106,44 @@ function ActionModal({ button, onClose }: { button: ReportButton; onClose: () =>
   );
 }
 
-function ReportCard({ group, onPick }: { group: ReportGroup; onPick: (button: ReportButton) => void }) {
+function ReportCard({ group, onPick, collapsed = false }: { group: ReportGroup; onPick: (button: ReportButton) => void; collapsed?: boolean }) {
+  const body = (
+    <div className="report-button-grid">
+      {group.buttons.map((button) => {
+        const className = `report-button ${button.tone || "blue"}`;
+        if (button.mode === "direct" || !button.kind) {
+          return (
+            <a className={className} href={button.href || "#"} key={`${button.label}-${button.href}`}>
+              <span>{button.label}</span>
+              {button.note ? <small>{button.note}</small> : null}
+            </a>
+          );
+        }
+        return (
+          <button className={`${className} report-button-reset`} type="button" onClick={() => onPick(button)} key={`${button.label}-${button.kind}-${button.window}`}>
+            <span>{button.label}</span>
+            {button.note ? <small>{button.note}</small> : null}
+          </button>
+        );
+      })}
+    </div>
+  );
+
+  if (collapsed) {
+    return (
+      <details className="panel report-panel report-details">
+        <summary>
+          <span>
+            <span className="panel-title">{group.title}</span>
+            <span className="panel-meta">{group.meta}</span>
+          </span>
+          <span className="badge amber">debug</span>
+        </summary>
+        {body}
+      </details>
+    );
+  }
+
   return (
     <section className="panel report-panel">
       <div className="panel-header">
@@ -115,25 +152,7 @@ function ReportCard({ group, onPick }: { group: ReportGroup; onPick: (button: Re
           <div className="panel-meta">{group.meta}</div>
         </div>
       </div>
-      <div className="report-button-grid">
-        {group.buttons.map((button) => {
-          const className = `report-button ${button.tone || "blue"}`;
-          if (button.mode === "direct" || !button.kind) {
-            return (
-              <a className={className} href={button.href || "#"} key={`${button.label}-${button.href}`}>
-                <span>{button.label}</span>
-                {button.note ? <small>{button.note}</small> : null}
-              </a>
-            );
-          }
-          return (
-            <button className={`${className} report-button-reset`} type="button" onClick={() => onPick(button)} key={`${button.label}-${button.kind}-${button.window}`}>
-              <span>{button.label}</span>
-              {button.note ? <small>{button.note}</small> : null}
-            </button>
-          );
-        })}
-      </div>
+      {body}
     </section>
   );
 }
@@ -143,7 +162,7 @@ export default function ReportsClient({ truth }: { truth: TruthSummary }) {
   const groups = useMemo<ReportGroup[]>(() => [
     {
       title: "Quick reports",
-      meta: "The reports you will actually use most often. Click once, then choose readable or raw.",
+      meta: "Daily operator buttons. Start here instead of hunting through debug endpoints.",
       buttons: [
         directButton("Run Raven now", "/run?execute=1", "readable run + raw JSON", "green"),
         reportButton("Latest performance", "performance", "/api/performance/report?window=24h", "/api/performance?window=24h", "24h", "operator health", "blue"),
@@ -276,10 +295,19 @@ export default function ReportsClient({ truth }: { truth: TruthSummary }) {
           </div>
         </section>
 
+        <section className="panel operator-help-panel">
+          <div className="panel-header">
+            <div>
+              <div className="panel-title">What should I look at?</div>
+              <div className="panel-meta">Daily check: Run Raven now, Paper ledger, Performance 24h, Lifecycle, Signal Truth 7d, AI usage 24h. Advanced Manual Tools are debug-only and collapsed at the bottom.</div>
+            </div>
+          </div>
+        </section>
+
         <div className="report-stack">
           {groups.map((group) => (
             <div id={group.title === "Advanced manual tools" ? "advanced" : undefined} key={group.title}>
-              <ReportCard group={group} onPick={setSelected} />
+              <ReportCard group={group} onPick={setSelected} collapsed={group.title === "Advanced manual tools"} />
             </div>
           ))}
         </div>

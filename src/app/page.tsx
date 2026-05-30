@@ -14,6 +14,7 @@ import { getAiRouterSnapshot } from "@/lib/aiRouter";
 import { getCronStatusSnapshot } from "@/lib/cronStatus";
 import { getLatestSignalEvents, getSignalSourceHealth } from "@/lib/signalEvents";
 import { watchlist } from "@/lib/watchlist";
+import { getRavenMarketStatus } from "@/lib/marketStatus";
 
 export const dynamic = "force-dynamic";
 
@@ -293,6 +294,10 @@ export default async function Home() {
     safeCronStatus()
   ]);
 
+  const marketStatus = getRavenMarketStatus();
+  const maxNotional = Number(process.env.RAVEN_MAX_NOTIONAL_PER_TRADE || 1000);
+  const maxDailyTrades = Number(process.env.RAVEN_MAX_DAILY_TRADES || 10);
+  const maxOpenPositions = Number(process.env.RAVEN_MAX_OPEN_POSITIONS || 10);
   const latestRun = pipelineRuns[0];
   const openTrades = paperTrades.filter((trade) => trade.status === "open");
   const closedTrades = paperTrades.filter((trade) => trade.status === "closed");
@@ -438,6 +443,25 @@ export default async function Home() {
           )}
         </section>
 
+        <section className="panel market-status-panel">
+          <div className="panel-header">
+            <div>
+              <div className="panel-title">Market and broker order status</div>
+              <div className="panel-meta">Raven sim trades can run anytime. Alpaca paper broker orders follow the policy below.</div>
+            </div>
+            <span className={`badge ${marketStatus.isOpen ? "green" : "amber"}`}>{marketStatus.status}</span>
+          </div>
+          <div className="run-summary run-summary-tight">
+            <div><span>Now ET</span><strong>{marketStatus.nowEt}</strong></div>
+            <div><span>Next open</span><strong>{marketStatus.nextOpenLabel}</strong></div>
+            <div><span>Broker policy</span><strong>{cleanLabel(marketStatus.brokerOrderPolicy)}</strong></div>
+            <div><span>Broker orders</span><strong className={marketStatus.brokerOrdersAllowedNow ? "text-green" : "text-amber"}>{marketStatus.brokerOrdersAllowedNow ? "allowed" : "blocked"}</strong></div>
+            <div><span>Max notional</span><strong>{money(Number.isFinite(maxNotional) ? maxNotional : 1000)}</strong></div>
+            <div><span>Paper mode</span><strong>{tradingSafety?.paperOrderSubmission || "unknown"}</strong></div>
+          </div>
+          <div className="empty-state">{marketStatus.note}</div>
+        </section>
+
         <div className="kpi-row">
           <div className="kpi">
             <div className="kpi-label">Last run</div>
@@ -468,6 +492,16 @@ export default async function Home() {
             <div className="kpi-label">Sources</div>
             <div className="kpi-value">{activeSources}/{sourceHealth.length || 6}</div>
             <div className="kpi-note">{latestErrors ? `${latestErrors} errors` : "healthy"}</div>
+          </div>
+          <div className="kpi">
+            <div className="kpi-label">Market</div>
+            <div className={`kpi-value ${marketStatus.isOpen ? "text-green" : "text-amber"}`}>{marketStatus.status}</div>
+            <div className="kpi-note">broker orders {marketStatus.brokerOrdersAllowedNow ? "allowed" : "blocked"}</div>
+          </div>
+          <div className="kpi">
+            <div className="kpi-label">Trade settings</div>
+            <div className="kpi-value">{money(Number.isFinite(maxNotional) ? maxNotional : 1000)}</div>
+            <div className="kpi-note">daily {Number.isFinite(maxDailyTrades) ? maxDailyTrades : 10} · open {Number.isFinite(maxOpenPositions) ? maxOpenPositions : 10}</div>
           </div>
         </div>
 

@@ -1,7 +1,7 @@
 import { confirmPendingSecSignalsWithAlpaca } from "@/lib/alpaca";
 import { classifyPendingSecFilings } from "@/lib/classifier";
 import { db, ensureRavenTables, hasDatabase } from "@/lib/db";
-import { runPaperTradeEngine, reviewOpenPaperTrades } from "@/lib/paper";
+import { runPaperTradeEngine, reviewOpenPaperTrades, stabilizePaperTradeBook } from "@/lib/paper";
 import { scorePendingSignals } from "@/lib/scoring";
 import { scanWatchlistSecFilings } from "@/lib/sec";
 import { savePipelineRun } from "@/lib/pipelineRuns";
@@ -150,15 +150,17 @@ export async function runRavenPipeline() {
   steps.push(await runStep("score_signals", () => scorePendingSignals(10)));
   steps.push(await runStep("paper_candidate_seeder", () => seedPaperTradeCandidates(16)));
   steps.push(await runStep("paper_trade_engine", () => runPaperTradeEngine(16)));
+  steps.push(await runStep("paper_trade_book_stabilizer", () => stabilizePaperTradeBook(200)));
   steps.push(await runStep("paper_order_execution", () => runPaperOrderExecution({ submit: true })));
   steps.push(await runStep("shadow_trade_sync", () => syncShadowTrades(25)));
   steps.push(await runStep("signal_truth_sync", () => syncSignalTruthOutcomes(25)));
   steps.push(await runStep("paper_position_lifecycle", getPaperPositionLifecycle));
-  steps.push(await runStep("paper_trade_review", () => reviewOpenPaperTrades(10)));
+  steps.push(await runStep("paper_trade_review", () => reviewOpenPaperTrades(50)));
 
   const failed = steps.filter((step) => !step.ok);
   const opened = steps.find((step) => step.name === "paper_trade_engine")?.result as { opened?: number } | undefined;
   const execution = steps.find((step) => step.name === "paper_order_execution")?.result as { orderSubmission?: string; submittedOrder?: unknown } | undefined;
+  const stabilized = steps.find((step) => step.name === "paper_trade_book_stabilizer")?.result as { autoClosed?: number } | undefined;
   const reviewed = steps.find((step) => step.name === "paper_trade_review")?.result as { closed?: number } | undefined;
 
   const result = {
@@ -171,7 +173,7 @@ export async function runRavenPipeline() {
       steps: steps.length,
       failed: failed.length,
       paperTradesOpened: (execution?.orderSubmission === "submitted" ? 1 : 0) || opened?.opened || 0,
-      paperTradesClosed: reviewed?.closed || 0
+      paperTradesClosed: (stabilized?.autoClosed || 0) + (reviewed?.closed || 0)
     },
     steps
   };

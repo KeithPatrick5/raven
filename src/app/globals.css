@@ -1477,3 +1477,39 @@ body {
   cursor: pointer;
   font: inherit;
 }
+
+.report-details {
+  padding: 0;
+}
+
+.report-details > summary {
+  align-items: center;
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  list-style: none;
+  padding: 18px 20px;
+}
+
+.report-details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.report-details > summary .panel-title,
+.report-details > summary .panel-meta {
+  display: block;
+}
+
+.report-details .report-button-grid {
+  border-top: 1px solid var(--border);
+  padding: 18px;
+}
+
+.operator-help-panel {
+  border-color: rgba(71, 164, 255, 0.35);
+}
+
+.market-status-panel {
+  border-color: rgba(255, 190, 77, 0.28);
+  margin-bottom: 14px;
+}
